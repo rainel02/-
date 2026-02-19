@@ -132,7 +132,7 @@ async function load() {
     allTags.value = tags
   } catch (e) {
     console.error(e)
-    alert('加载总览失败，请确认后端服务在 8080 端口运行')
+    alert('加载总览失败，请确认桌面版后端服务已启动（或重启应用后重试）')
   }
 }
 

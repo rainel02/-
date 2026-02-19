@@ -5,11 +5,21 @@ const router = useRouter();
 const existingTags = ref([]);
 const selectedTags = ref([]);
 const newTag = ref('');
+const confirmDialog = reactive({
+    visible: false,
+    tag: '',
+    message: ''
+});
 const extracting = ref(false);
 const cropStageRef = ref(null);
 const patternImgRef = ref(null);
+const magnifierCanvasRef = ref(null);
 const activeHandle = ref(null);
+const selectedCorner = ref('BR');
+const nudgeStep = ref(1);
 const cropRect = reactive({ x: 0, y: 0, w: 0, h: 0 });
+const magnifierVisible = ref(false);
+const magnifierPos = reactive({ x: 0, y: 0 });
 const MIN_CROP_SIZE = 8;
 const form = reactive({
     name: '',
@@ -44,6 +54,13 @@ function onHandleMouseDown(handle, event) {
     event.preventDefault();
     event.stopPropagation();
     activeHandle.value = handle;
+    selectedCorner.value = handle;
+    magnifierVisible.value = true;
+    const point = toStagePoint(event);
+    if (point) {
+        updateMagnifier(point);
+        updateMagnifierPosition(point);
+    }
 }
 function onCropMouseMove(event) {
     if (!activeHandle.value)
@@ -52,6 +69,8 @@ function onCropMouseMove(event) {
     const bounds = getImageBoundsInStage();
     if (!point || !bounds)
         return;
+    updateMagnifier(point);
+    updateMagnifierPosition(point);
     const right = cropRect.x + cropRect.w;
     const bottom = cropRect.y + cropRect.h;
     if (activeHandle.value === 'TL') {
@@ -63,6 +82,24 @@ function onCropMouseMove(event) {
         cropRect.y = newY;
         return;
     }
+    if (activeHandle.value === 'TR') {
+        const maxRight = bounds.left + bounds.width;
+        const newRight = Math.max(Math.min(point.x, maxRight), cropRect.x + MIN_CROP_SIZE);
+        const newY = Math.min(Math.max(point.y, bounds.top), bottom - MIN_CROP_SIZE);
+        cropRect.w = newRight - cropRect.x;
+        cropRect.h = bottom - newY;
+        cropRect.y = newY;
+        return;
+    }
+    if (activeHandle.value === 'BL') {
+        const maxBottom = bounds.top + bounds.height;
+        const newX = Math.min(Math.max(point.x, bounds.left), right - MIN_CROP_SIZE);
+        const newBottom = Math.max(Math.min(point.y, maxBottom), cropRect.y + MIN_CROP_SIZE);
+        cropRect.w = right - newX;
+        cropRect.h = newBottom - cropRect.y;
+        cropRect.x = newX;
+        return;
+    }
     const maxRight = bounds.left + bounds.width;
     const maxBottom = bounds.top + bounds.height;
     const newRight = Math.max(Math.min(point.x, maxRight), cropRect.x + MIN_CROP_SIZE);
@@ -72,9 +109,126 @@ function onCropMouseMove(event) {
 }
 function onCropMouseUp() {
     activeHandle.value = null;
+    magnifierVisible.value = false;
     if (cropRect.w < MIN_CROP_SIZE || cropRect.h < MIN_CROP_SIZE) {
         initSelectionByCorners();
     }
+}
+function refreshNudgeMagnifier() {
+    const point = selectedCorner.value === 'TL'
+        ? { x: cropRect.x, y: cropRect.y }
+        : selectedCorner.value === 'TR'
+            ? { x: cropRect.x + cropRect.w, y: cropRect.y }
+            : selectedCorner.value === 'BL'
+                ? { x: cropRect.x, y: cropRect.y + cropRect.h }
+                : { x: cropRect.x + cropRect.w, y: cropRect.y + cropRect.h };
+    magnifierVisible.value = true;
+    updateMagnifier(point);
+    updateMagnifierPosition(point);
+}
+function nudgeSelection(dx, dy) {
+    const bounds = getImageBoundsInStage();
+    if (!bounds)
+        return;
+    const stepX = Number.isFinite(dx) ? dx : 0;
+    const stepY = Number.isFinite(dy) ? dy : 0;
+    if (!stepX && !stepY)
+        return;
+    const right = cropRect.x + cropRect.w;
+    const bottom = cropRect.y + cropRect.h;
+    const maxRight = bounds.left + bounds.width;
+    const maxBottom = bounds.top + bounds.height;
+    if (selectedCorner.value === 'TL') {
+        const nextX = Math.min(Math.max(cropRect.x + stepX, bounds.left), right - MIN_CROP_SIZE);
+        const nextY = Math.min(Math.max(cropRect.y + stepY, bounds.top), bottom - MIN_CROP_SIZE);
+        cropRect.w = right - nextX;
+        cropRect.h = bottom - nextY;
+        cropRect.x = nextX;
+        cropRect.y = nextY;
+        refreshNudgeMagnifier();
+        return;
+    }
+    if (selectedCorner.value === 'TR') {
+        const nextRight = Math.max(Math.min(right + stepX, maxRight), cropRect.x + MIN_CROP_SIZE);
+        const nextY = Math.min(Math.max(cropRect.y + stepY, bounds.top), bottom - MIN_CROP_SIZE);
+        cropRect.w = nextRight - cropRect.x;
+        cropRect.h = bottom - nextY;
+        cropRect.y = nextY;
+        refreshNudgeMagnifier();
+        return;
+    }
+    if (selectedCorner.value === 'BL') {
+        const nextX = Math.min(Math.max(cropRect.x + stepX, bounds.left), right - MIN_CROP_SIZE);
+        const nextBottom = Math.max(Math.min(bottom + stepY, maxBottom), cropRect.y + MIN_CROP_SIZE);
+        cropRect.w = right - nextX;
+        cropRect.h = nextBottom - cropRect.y;
+        cropRect.x = nextX;
+        refreshNudgeMagnifier();
+        return;
+    }
+    const nextRight = Math.max(Math.min(right + stepX, maxRight), cropRect.x + MIN_CROP_SIZE);
+    const nextBottom = Math.max(Math.min(bottom + stepY, maxBottom), cropRect.y + MIN_CROP_SIZE);
+    cropRect.w = nextRight - cropRect.x;
+    cropRect.h = nextBottom - cropRect.y;
+    refreshNudgeMagnifier();
+}
+function updateMagnifierPosition(point) {
+    if (!cropStageRef.value)
+        return;
+    const size = 150;
+    const margin = 12;
+    const stageWidth = cropStageRef.value.clientWidth;
+    const stageHeight = cropStageRef.value.clientHeight;
+    let x = point.x + margin;
+    let y = point.y + margin;
+    if (activeHandle.value === 'BR' || activeHandle.value === 'BL') {
+        y = point.y - size - margin;
+    }
+    if (x + size > stageWidth)
+        x = stageWidth - size;
+    if (y + size > stageHeight)
+        y = stageHeight - size;
+    if (x < 0)
+        x = 0;
+    if (y < 0)
+        y = 0;
+    magnifierPos.x = x;
+    magnifierPos.y = y;
+}
+function updateMagnifier(point) {
+    if (!patternImgRef.value || !magnifierCanvasRef.value)
+        return;
+    const bounds = getImageBoundsInStage();
+    if (!bounds)
+        return;
+    const image = patternImgRef.value;
+    const canvas = magnifierCanvasRef.value;
+    const ctx = canvas.getContext('2d');
+    if (!ctx)
+        return;
+    const scaleX = image.naturalWidth / bounds.width;
+    const scaleY = image.naturalHeight / bounds.height;
+    const localX = point.x - bounds.left;
+    const localY = point.y - bounds.top;
+    const naturalX = localX * scaleX;
+    const naturalY = localY * scaleY;
+    const size = 150;
+    const zoom = 4;
+    const sourceSize = size / zoom;
+    const sx = naturalX - sourceSize / 2;
+    const sy = naturalY - sourceSize / 2;
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.drawImage(image, sx, sy, sourceSize, sourceSize, 0, 0, size, size);
+    ctx.strokeStyle = 'rgba(255, 0, 0, 0.85)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(size / 2, 0);
+    ctx.lineTo(size / 2, size);
+    ctx.moveTo(0, size / 2);
+    ctx.lineTo(size, size / 2);
+    ctx.stroke();
 }
 function getImageBoundsInStage() {
     if (!cropStageRef.value || !patternImgRef.value)
@@ -209,6 +363,39 @@ function addCustomTag() {
     }
     newTag.value = '';
 }
+async function removeTag(tag) {
+    const t = tag.trim();
+    if (!t)
+        return;
+    confirmDialog.visible = true;
+    confirmDialog.tag = t;
+    confirmDialog.message = `确认删除 tag「${t}」吗？删除后，所有含该 tag 的拼豆都会移除这个 tag（其他内容不变）。`;
+}
+function closeConfirmDialog() {
+    confirmDialog.visible = false;
+    confirmDialog.tag = '';
+    confirmDialog.message = '';
+}
+async function submitConfirmDialog() {
+    const t = confirmDialog.tag.trim();
+    if (!t) {
+        closeConfirmDialog();
+        return;
+    }
+    try {
+        await beadApi.deleteTag(t);
+        existingTags.value = existingTags.value.filter(item => item !== t);
+        selectedTags.value = selectedTags.value.filter(item => item !== t);
+        alert(`已删除 tag：${t}`);
+    }
+    catch (error) {
+        console.error(error);
+        alert('删除 tag 失败，请稍后重试');
+    }
+    finally {
+        closeConfirmDialog();
+    }
+}
 function cropSelectedImageBase64() {
     if (!patternImgRef.value || !hasSelection.value) {
         throw new Error('未选择裁剪区域');
@@ -263,6 +450,14 @@ const topLeftHandleStyle = computed(() => ({
     left: `${cropRect.x}px`,
     top: `${cropRect.y}px`
 }));
+const topRightHandleStyle = computed(() => ({
+    left: `${cropRect.x + cropRect.w}px`,
+    top: `${cropRect.y}px`
+}));
+const bottomLeftHandleStyle = computed(() => ({
+    left: `${cropRect.x}px`,
+    top: `${cropRect.y + cropRect.h}px`
+}));
 const bottomRightHandleStyle = computed(() => ({
     left: `${cropRect.x + cropRect.w}px`,
     top: `${cropRect.y + cropRect.h}px`
@@ -276,6 +471,10 @@ const selectionHint = computed(() => {
     const bottom = Math.round(cropRect.y + cropRect.h);
     return `左上(${left}, ${top}) 右下(${right}, ${bottom})`;
 });
+const magnifierStyle = computed(() => ({
+    left: `${magnifierPos.x}px`,
+    top: `${magnifierPos.y}px`
+}));
 onMounted(async () => {
     try {
         existingTags.value = await beadApi.tags();
@@ -288,22 +487,30 @@ debugger; /* PartiallyEnd: #3632/scriptSetup.vue */
 const __VLS_ctx = {};
 let __VLS_components;
 let __VLS_directives;
+/** @type {__VLS_StyleScopedClasses['tag-remove-btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
+/** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
+/** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
+/** @type {__VLS_StyleScopedClasses['magnifier']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-grid']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-grid']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-grid']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-grid']} */ ;
+/** @type {__VLS_StyleScopedClasses['new-layout']} */ ;
 // CSS variable injection 
 // CSS variable injection end 
 __VLS_asFunctionalElement(__VLS_intrinsicElements.section, __VLS_intrinsicElements.section)({
-    ...{ class: "card" },
+    ...{ class: "card new-page" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.h2, __VLS_intrinsicElements.h2)({
     ...{ class: "section-title" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-    ...{ class: "row" },
-    ...{ style: {} },
+    ...{ class: "row new-layout" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-    ...{ style: {} },
+    ...{ class: "new-col" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
 __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
@@ -312,17 +519,18 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
 (__VLS_ctx.form.name);
 __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-    ...{ class: "card" },
-    ...{ style: {} },
+    ...{ class: "card tag-card" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-    ...{ class: "row" },
-    ...{ style: {} },
+    ...{ class: "row tag-list" },
 });
 for (const [tag] of __VLS_getVForSourceType((__VLS_ctx.existingTags))) {
-    __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         key: (tag),
-        ...{ style: {} },
+        ...{ class: "tag-item" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({
+        ...{ class: "tag-item-label" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
         type: "checkbox",
@@ -330,6 +538,12 @@ for (const [tag] of __VLS_getVForSourceType((__VLS_ctx.existingTags))) {
     });
     (__VLS_ctx.selectedTags);
     (tag);
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (...[$event]) => {
+                __VLS_ctx.removeTag(tag);
+            } },
+        ...{ class: "tag-remove-btn" },
+    });
 }
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
     ...{ class: "row" },
@@ -344,7 +558,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElement
     ...{ class: "btn secondary" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-    ...{ style: {} },
+    ...{ class: "selected-tags" },
 });
 (__VLS_ctx.selectedTags.join(', ') || '无');
 __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
@@ -382,18 +596,17 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
     accept: "image/*",
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-    ...{ style: {} },
+    ...{ class: "new-col" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.h3, __VLS_intrinsicElements.h3)({
-    ...{ style: {} },
+    ...{ class: "extract-title" },
 });
 if (__VLS_ctx.form.patternImage) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "card" },
-        ...{ style: {} },
+        ...{ class: "card crop-card" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ style: {} },
+        ...{ class: "helper-text" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ onMousemove: (__VLS_ctx.onCropMouseMove) },
@@ -436,6 +649,32 @@ if (__VLS_ctx.form.patternImage) {
                         return;
                     if (!(__VLS_ctx.hasSelection))
                         return;
+                    __VLS_ctx.onHandleMouseDown('TR', $event);
+                } },
+            ...{ class: "crop-handle tr" },
+            ...{ style: (__VLS_ctx.topRightHandleStyle) },
+        });
+    }
+    if (__VLS_ctx.hasSelection) {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ onMousedown: (...[$event]) => {
+                    if (!(__VLS_ctx.form.patternImage))
+                        return;
+                    if (!(__VLS_ctx.hasSelection))
+                        return;
+                    __VLS_ctx.onHandleMouseDown('BL', $event);
+                } },
+            ...{ class: "crop-handle bl" },
+            ...{ style: (__VLS_ctx.bottomLeftHandleStyle) },
+        });
+    }
+    if (__VLS_ctx.hasSelection) {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ onMousedown: (...[$event]) => {
+                    if (!(__VLS_ctx.form.patternImage))
+                        return;
+                    if (!(__VLS_ctx.hasSelection))
+                        return;
                     __VLS_ctx.onHandleMouseDown('BR', $event);
                 } },
             ...{ class: "crop-handle br" },
@@ -443,15 +682,95 @@ if (__VLS_ctx.form.patternImage) {
         });
     }
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "row" },
-        ...{ style: {} },
+        ...{ class: "magnifier" },
+        ...{ style: (__VLS_ctx.magnifierStyle) },
+    });
+    __VLS_asFunctionalDirective(__VLS_directives.vShow)(null, { ...__VLS_directiveBindingRestFields, value: (__VLS_ctx.magnifierVisible) }, null, null);
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.canvas, __VLS_intrinsicElements.canvas)({
+        ref: "magnifierCanvasRef",
+        width: "150",
+        height: "150",
+    });
+    /** @type {typeof __VLS_ctx.magnifierCanvasRef} */ ;
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "row selection-row" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ style: {} },
+        ...{ class: "helper-text" },
     });
     (__VLS_ctx.selectionHint);
     __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
         ...{ onClick: (__VLS_ctx.resetSelection) },
+        ...{ class: "btn secondary" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "nudge-panel" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "row nudge-toolbar" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({
+        ...{ class: "helper-text" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
+        ...{ class: "select nudge-select" },
+        value: (__VLS_ctx.selectedCorner),
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+        value: "TL",
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+        value: "TR",
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+        value: "BL",
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+        value: "BR",
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({
+        ...{ class: "helper-text" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+        ...{ class: "input nudge-input" },
+        type: "number",
+        min: "1",
+        max: "20",
+    });
+    (__VLS_ctx.nudgeStep);
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "nudge-grid" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (...[$event]) => {
+                if (!(__VLS_ctx.form.patternImage))
+                    return;
+                __VLS_ctx.nudgeSelection(0, -__VLS_ctx.nudgeStep);
+            } },
+        ...{ class: "btn secondary" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (...[$event]) => {
+                if (!(__VLS_ctx.form.patternImage))
+                    return;
+                __VLS_ctx.nudgeSelection(-__VLS_ctx.nudgeStep, 0);
+            } },
+        ...{ class: "btn secondary" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (...[$event]) => {
+                if (!(__VLS_ctx.form.patternImage))
+                    return;
+                __VLS_ctx.nudgeSelection(__VLS_ctx.nudgeStep, 0);
+            } },
+        ...{ class: "btn secondary" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (...[$event]) => {
+                if (!(__VLS_ctx.form.patternImage))
+                    return;
+                __VLS_ctx.nudgeSelection(0, __VLS_ctx.nudgeStep);
+            } },
         ...{ class: "btn secondary" },
     });
 }
@@ -462,8 +781,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElement
 });
 (__VLS_ctx.extracting ? '识别中...' : '从图纸提取色号');
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-    ...{ class: "table-wrap" },
-    ...{ style: {} },
+    ...{ class: "table-wrap color-table-wrap" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.table, __VLS_intrinsicElements.table)({
     ...{ class: "table" },
@@ -503,8 +821,7 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElement
     ...{ class: "btn secondary" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-    ...{ class: "row" },
-    ...{ style: {} },
+    ...{ class: "row page-actions" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
     ...{ onClick: (__VLS_ctx.save) },
@@ -523,34 +840,101 @@ const __VLS_2 = __VLS_1({
 }, ...__VLS_functionalComponentArgsRest(__VLS_1));
 __VLS_3.slots.default;
 var __VLS_3;
+if (__VLS_ctx.confirmDialog.visible) {
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ onClick: (__VLS_ctx.closeConfirmDialog) },
+        ...{ class: "modal-mask" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ onClick: () => { } },
+        ...{ class: "modal-panel confirm-panel" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.h3, __VLS_intrinsicElements.h3)({
+        ...{ class: "confirm-title" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+        ...{ class: "confirm-text" },
+    });
+    (__VLS_ctx.confirmDialog.message);
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "row confirm-actions" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (__VLS_ctx.closeConfirmDialog) },
+        ...{ class: "btn secondary" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (__VLS_ctx.submitConfirmDialog) },
+        ...{ class: "btn warn" },
+    });
+}
 /** @type {__VLS_StyleScopedClasses['card']} */ ;
+/** @type {__VLS_StyleScopedClasses['new-page']} */ ;
 /** @type {__VLS_StyleScopedClasses['section-title']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['new-layout']} */ ;
+/** @type {__VLS_StyleScopedClasses['new-col']} */ ;
 /** @type {__VLS_StyleScopedClasses['input']} */ ;
 /** @type {__VLS_StyleScopedClasses['card']} */ ;
+/** @type {__VLS_StyleScopedClasses['tag-card']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['tag-list']} */ ;
+/** @type {__VLS_StyleScopedClasses['tag-item']} */ ;
+/** @type {__VLS_StyleScopedClasses['tag-item-label']} */ ;
+/** @type {__VLS_StyleScopedClasses['tag-remove-btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
 /** @type {__VLS_StyleScopedClasses['input']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
+/** @type {__VLS_StyleScopedClasses['selected-tags']} */ ;
 /** @type {__VLS_StyleScopedClasses['select']} */ ;
 /** @type {__VLS_StyleScopedClasses['input']} */ ;
 /** @type {__VLS_StyleScopedClasses['input']} */ ;
 /** @type {__VLS_StyleScopedClasses['input']} */ ;
+/** @type {__VLS_StyleScopedClasses['new-col']} */ ;
+/** @type {__VLS_StyleScopedClasses['extract-title']} */ ;
 /** @type {__VLS_StyleScopedClasses['card']} */ ;
+/** @type {__VLS_StyleScopedClasses['crop-card']} */ ;
+/** @type {__VLS_StyleScopedClasses['helper-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-stage']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-image']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-mask']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
 /** @type {__VLS_StyleScopedClasses['tl']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
+/** @type {__VLS_StyleScopedClasses['tr']} */ ;
+/** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
+/** @type {__VLS_StyleScopedClasses['bl']} */ ;
+/** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
 /** @type {__VLS_StyleScopedClasses['br']} */ ;
+/** @type {__VLS_StyleScopedClasses['magnifier']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['selection-row']} */ ;
+/** @type {__VLS_StyleScopedClasses['helper-text']} */ ;
+/** @type {__VLS_StyleScopedClasses['btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['secondary']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-panel']} */ ;
+/** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-toolbar']} */ ;
+/** @type {__VLS_StyleScopedClasses['helper-text']} */ ;
+/** @type {__VLS_StyleScopedClasses['select']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-select']} */ ;
+/** @type {__VLS_StyleScopedClasses['helper-text']} */ ;
+/** @type {__VLS_StyleScopedClasses['input']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-input']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-grid']} */ ;
+/** @type {__VLS_StyleScopedClasses['btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['secondary']} */ ;
+/** @type {__VLS_StyleScopedClasses['btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['secondary']} */ ;
+/** @type {__VLS_StyleScopedClasses['btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['secondary']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
 /** @type {__VLS_StyleScopedClasses['table-wrap']} */ ;
+/** @type {__VLS_StyleScopedClasses['color-table-wrap']} */ ;
 /** @type {__VLS_StyleScopedClasses['table']} */ ;
 /** @type {__VLS_StyleScopedClasses['input']} */ ;
 /** @type {__VLS_StyleScopedClasses['input']} */ ;
@@ -559,10 +943,22 @@ var __VLS_3;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['page-actions']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['success']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
+/** @type {__VLS_StyleScopedClasses['modal-mask']} */ ;
+/** @type {__VLS_StyleScopedClasses['modal-panel']} */ ;
+/** @type {__VLS_StyleScopedClasses['confirm-panel']} */ ;
+/** @type {__VLS_StyleScopedClasses['confirm-title']} */ ;
+/** @type {__VLS_StyleScopedClasses['confirm-text']} */ ;
+/** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['confirm-actions']} */ ;
+/** @type {__VLS_StyleScopedClasses['btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['secondary']} */ ;
+/** @type {__VLS_StyleScopedClasses['btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['warn']} */ ;
 var __VLS_dollars;
 const __VLS_self = (await import('vue')).defineComponent({
     setup() {
@@ -570,13 +966,19 @@ const __VLS_self = (await import('vue')).defineComponent({
             existingTags: existingTags,
             selectedTags: selectedTags,
             newTag: newTag,
+            confirmDialog: confirmDialog,
             extracting: extracting,
             cropStageRef: cropStageRef,
             patternImgRef: patternImgRef,
+            magnifierCanvasRef: magnifierCanvasRef,
+            selectedCorner: selectedCorner,
+            nudgeStep: nudgeStep,
+            magnifierVisible: magnifierVisible,
             form: form,
             onHandleMouseDown: onHandleMouseDown,
             onCropMouseMove: onCropMouseMove,
             onCropMouseUp: onCropMouseUp,
+            nudgeSelection: nudgeSelection,
             onPatternImageLoad: onPatternImageLoad,
             resetSelection: resetSelection,
             onPattern: onPattern,
@@ -586,11 +988,17 @@ const __VLS_self = (await import('vue')).defineComponent({
             addColorRow: addColorRow,
             save: save,
             addCustomTag: addCustomTag,
+            removeTag: removeTag,
+            closeConfirmDialog: closeConfirmDialog,
+            submitConfirmDialog: submitConfirmDialog,
             hasSelection: hasSelection,
             cropRectStyle: cropRectStyle,
             topLeftHandleStyle: topLeftHandleStyle,
+            topRightHandleStyle: topRightHandleStyle,
+            bottomLeftHandleStyle: bottomLeftHandleStyle,
             bottomRightHandleStyle: bottomRightHandleStyle,
             selectionHint: selectionHint,
+            magnifierStyle: magnifierStyle,
         };
     },
 });

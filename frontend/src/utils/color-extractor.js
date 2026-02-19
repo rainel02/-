@@ -1,4 +1,4 @@
-import { createWorker } from 'tesseract.js';
+import { createWorker, PSM } from 'tesseract.js';
 function normalizeColorCode(code) {
     return code.toUpperCase().trim().replace(/^([A-Z]+)0+(?=[1-9])/, '$1');
 }
@@ -128,7 +128,7 @@ export async function extractColorRequirementsFromImage(dataUrl) {
     try {
         await worker.setParameters({
             tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789()x×',
-            tessedit_pageseg_mode: '11'
+            tessedit_pageseg_mode: PSM.SPARSE_TEXT
         });
         const normalResult = await worker.recognize(normal);
         const invertedResult = await worker.recognize(inverted);

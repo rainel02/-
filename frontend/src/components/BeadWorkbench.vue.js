@@ -1,9 +1,11 @@
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { beadApi } from '@/api/beads';
 const props = defineProps();
 const rows = ref(20);
 const cols = ref(20);
 const localColors = ref([]);
+const manualCode = ref('');
+const manualQuantity = ref(1);
 const cells = ref([]);
 const selectedCode = ref(null);
 const analyzing = ref(false);
@@ -18,6 +20,7 @@ const cropStageRef = ref(null);
 const patternImgRef = ref(null);
 const magnifierCanvasRef = ref(null);
 const gridViewportRef = ref(null);
+const fullscreenHostRef = ref(null);
 const activeHandle = ref(null);
 const selectedCorner = ref('BR');
 const nudgeStep = ref(1);
@@ -27,6 +30,7 @@ const magnifierVisible = ref(false);
 const magnifierPos = reactive({ x: 0, y: 0 });
 let magnifierHideTimer = null;
 const isGridPanning = ref(false);
+const isGridFullscreen = ref(false);
 const gridPanStart = reactive({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
 const RAW_COLOR_HEX = {
     A1: '#FAF5CD', A2: '#FCFED6', A3: '#FCFF92', A4: '#F7EC5C', A5: '#FFE44B', A6: '#FDA951', A7: '#FA8C4F', A8: '#F9E045', A9: '#F99C5F', A10: '#F47E36', A11: '#FEDB99', A12: '#FDA276', A13: '#FEC667', A14: '#F85842', A15: '#FBF65E', A16: '#FEFF97', A17: '#FDE173', A18: '#FCBF80', A19: '#FD7E77', A20: '#F9D66E', A21: '#FAE393', A22: '#EDF878', A23: '#E1C9BD', A24: '#F3F6A9', A25: '#FFD785', A26: '#FEC832',
@@ -57,6 +61,28 @@ function getContrastColor(hex) {
     const brightness = (r * 299 + g * 587 + b * 114) / 1000;
     return brightness > 125 ? '#111827' : '#ffffff';
 }
+function addManualColor() {
+    const code = normalizeColorCode(manualCode.value || '');
+    const quantity = Number(manualQuantity.value);
+    if (!code) {
+        alert('请输入色号');
+        return;
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+        alert('数量必须大于 0');
+        return;
+    }
+    const existing = localColors.value.find(item => normalizeColorCode(item.code || '') === code);
+    if (existing) {
+        existing.code = code;
+        existing.quantity = Number(existing.quantity || 0) + quantity;
+    }
+    else {
+        localColors.value.push({ code, quantity });
+    }
+    manualCode.value = '';
+    manualQuantity.value = 1;
+}
 watch(() => props.project, async (v) => {
     localColors.value = (v.requiredColors || []).map(c => ({ ...c }));
     rows.value = v.gridRows && v.gridRows > 0 ? v.gridRows : rows.value;
@@ -68,14 +94,54 @@ watch(() => props.project, async (v) => {
 const gridStyle = computed(() => ({
     display: 'grid',
     gridTemplateColumns: `repeat(${cols.value}, ${cellSize.value}px)`,
-    gap: '1px',
+    gap: '0',
     background: '#d1d5db'
 }));
-function cellStyle(code) {
+const indexSize = computed(() => cellSize.value);
+const rowNumbers = computed(() => Array.from({ length: rows.value }, (_, index) => index + 1));
+const colNumbers = computed(() => Array.from({ length: cols.value }, (_, index) => index + 1));
+const indexedGridStyle = computed(() => ({
+    display: 'grid',
+    gridTemplateColumns: `${indexSize.value}px auto`,
+    gridTemplateRows: `${indexSize.value}px auto`,
+    width: 'max-content',
+    minWidth: '100%'
+}));
+const colHeaderStyle = computed(() => ({
+    gridColumn: '2',
+    gridRow: '1',
+    display: 'grid',
+    gridTemplateColumns: `repeat(${cols.value}, ${cellSize.value}px)`,
+    width: `${cols.value * cellSize.value}px`
+}));
+const rowHeaderStyle = computed(() => ({
+    gridColumn: '1',
+    gridRow: '2',
+    display: 'grid',
+    gridTemplateRows: `repeat(${rows.value}, ${cellSize.value}px)`,
+    height: `${rows.value * cellSize.value}px`
+}));
+const indexCellStyle = computed(() => ({
+    width: `${indexSize.value}px`,
+    height: `${indexSize.value}px`,
+    fontSize: `${Math.max(10, Math.floor(indexSize.value * 0.32))}px`
+}));
+const indexCornerStyle = computed(() => ({
+    width: `${indexSize.value}px`,
+    height: `${indexSize.value}px`,
+    fontSize: `${Math.max(10, Math.floor(indexSize.value * 0.32))}px`
+}));
+function cellStyle(code, index) {
     const showAll = selectedCode.value === null;
     const isMatch = code === selectedCode.value;
     const hex = code ? getCodeHex(code) : '';
     const textColor = hex ? getContrastColor(hex) : '#111827';
+    const row = Math.floor(index / cols.value);
+    const col = index % cols.value;
+    const majorTop = row % 5 === 0;
+    const majorLeft = col % 5 === 0;
+    const isLastRow = row === rows.value - 1;
+    const isLastCol = col === cols.value - 1;
     return {
         width: `${cellSize.value}px`,
         height: `${cellSize.value}px`,
@@ -86,7 +152,10 @@ function cellStyle(code) {
         fontSize: `${Math.max(9, Math.floor(cellSize.value * 0.32))}px`,
         color: textColor,
         opacity: showAll || !code || isMatch ? '1' : '0.12',
-        border: isMatch ? '1px solid #111827' : '1px solid transparent',
+        borderTop: majorTop ? '2px solid #9ca3af' : '1px solid #e5e7eb',
+        borderLeft: majorLeft ? '2px solid #9ca3af' : '1px solid #e5e7eb',
+        borderRight: isLastCol ? '2px solid #9ca3af' : '1px solid #e5e7eb',
+        borderBottom: isLastRow ? '2px solid #9ca3af' : '1px solid #e5e7eb',
         boxSizing: 'border-box',
         transform: isMatch ? 'scale(1.04)' : 'scale(1)',
         zIndex: isMatch ? 1 : 0
@@ -180,7 +249,7 @@ async function extractRequiredColorsBySelection() {
 async function saveColors() {
     const clean = localColors.value.filter(v => v.code && v.quantity > 0);
     await beadApi.saveColors(props.project.id, clean);
-    alert('已保存色号数量');
+    alert('保存成功');
 }
 function getImageBoundsInStage() {
     if (!cropStageRef.value || !patternImgRef.value)
@@ -265,6 +334,24 @@ function onCropMouseMove(event) {
         cropRect.y = newY;
         return;
     }
+    if (activeHandle.value === 'TR') {
+        const maxRight = bounds.left + bounds.width;
+        const newRight = Math.max(Math.min(point.x, maxRight), cropRect.x + MIN_CROP_SIZE);
+        const newY = Math.min(Math.max(point.y, bounds.top), bottom - MIN_CROP_SIZE);
+        cropRect.w = newRight - cropRect.x;
+        cropRect.h = bottom - newY;
+        cropRect.y = newY;
+        return;
+    }
+    if (activeHandle.value === 'BL') {
+        const maxBottom = bounds.top + bounds.height;
+        const newX = Math.min(Math.max(point.x, bounds.left), right - MIN_CROP_SIZE);
+        const newBottom = Math.max(Math.min(point.y, maxBottom), cropRect.y + MIN_CROP_SIZE);
+        cropRect.w = right - newX;
+        cropRect.h = newBottom - cropRect.y;
+        cropRect.x = newX;
+        return;
+    }
     const maxRight = bounds.left + bounds.width;
     const maxBottom = bounds.top + bounds.height;
     const newRight = Math.max(Math.min(point.x, maxRight), cropRect.x + MIN_CROP_SIZE);
@@ -286,7 +373,7 @@ function updateMagnifierPosition(point) {
     const handleForPosition = activeHandle.value ?? selectedCorner.value;
     let x = point.x + margin;
     let y = point.y + margin;
-    if (handleForPosition === 'BR') {
+    if (handleForPosition === 'BR' || handleForPosition === 'BL') {
         y = point.y - size - margin;
     }
     if (x + size > stageWidth) {
@@ -310,7 +397,11 @@ function refreshNudgeMagnifier() {
         return;
     const point = selectedCorner.value === 'TL'
         ? { x: cropRect.x, y: cropRect.y }
-        : { x: cropRect.x + cropRect.w, y: cropRect.y + cropRect.h };
+        : selectedCorner.value === 'TR'
+            ? { x: cropRect.x + cropRect.w, y: cropRect.y }
+            : selectedCorner.value === 'BL'
+                ? { x: cropRect.x, y: cropRect.y + cropRect.h }
+                : { x: cropRect.x + cropRect.w, y: cropRect.y + cropRect.h };
     magnifierVisible.value = true;
     updateMagnifier(point);
     updateMagnifierPosition(point);
@@ -333,6 +424,8 @@ function nudgeSelection(dx, dy) {
         return;
     const right = cropRect.x + cropRect.w;
     const bottom = cropRect.y + cropRect.h;
+    const maxRight = bounds.left + bounds.width;
+    const maxBottom = bounds.top + bounds.height;
     if (selectedCorner.value === 'TL') {
         const nextX = Math.min(Math.max(cropRect.x + stepX, bounds.left), right - MIN_CROP_SIZE);
         const nextY = Math.min(Math.max(cropRect.y + stepY, bounds.top), bottom - MIN_CROP_SIZE);
@@ -343,8 +436,24 @@ function nudgeSelection(dx, dy) {
         refreshNudgeMagnifier();
         return;
     }
-    const maxRight = bounds.left + bounds.width;
-    const maxBottom = bounds.top + bounds.height;
+    if (selectedCorner.value === 'TR') {
+        const nextRight = Math.max(Math.min(right + stepX, maxRight), cropRect.x + MIN_CROP_SIZE);
+        const nextY = Math.min(Math.max(cropRect.y + stepY, bounds.top), bottom - MIN_CROP_SIZE);
+        cropRect.w = nextRight - cropRect.x;
+        cropRect.h = bottom - nextY;
+        cropRect.y = nextY;
+        refreshNudgeMagnifier();
+        return;
+    }
+    if (selectedCorner.value === 'BL') {
+        const nextX = Math.min(Math.max(cropRect.x + stepX, bounds.left), right - MIN_CROP_SIZE);
+        const nextBottom = Math.max(Math.min(bottom + stepY, maxBottom), cropRect.y + MIN_CROP_SIZE);
+        cropRect.w = right - nextX;
+        cropRect.h = nextBottom - cropRect.y;
+        cropRect.x = nextX;
+        refreshNudgeMagnifier();
+        return;
+    }
     const nextRight = Math.max(Math.min(right + stepX, maxRight), cropRect.x + MIN_CROP_SIZE);
     const nextBottom = Math.max(Math.min(bottom + stepY, maxBottom), cropRect.y + MIN_CROP_SIZE);
     cropRect.w = nextRight - cropRect.x;
@@ -483,6 +592,30 @@ function onGridMouseMove(event) {
 function onGridMouseUp() {
     isGridPanning.value = false;
 }
+async function toggleGridFullscreen() {
+    const host = fullscreenHostRef.value;
+    if (!host) {
+        return;
+    }
+    try {
+        if (document.fullscreenElement === host) {
+            await document.exitFullscreen();
+            return;
+        }
+        if (!document.fullscreenElement) {
+            await host.requestFullscreen();
+            return;
+        }
+        await host.requestFullscreen();
+    }
+    catch (error) {
+        console.error(error);
+        alert('当前浏览器不支持该全屏操作');
+    }
+}
+function onFullscreenChange() {
+    isGridFullscreen.value = document.fullscreenElement === fullscreenHostRef.value;
+}
 function parseGridCells(gridCellsJson, expectedLength) {
     if (!gridCellsJson) {
         return new Array(expectedLength).fill('');
@@ -520,6 +653,14 @@ const topLeftHandleStyle = computed(() => ({
     left: `${cropRect.x}px`,
     top: `${cropRect.y}px`
 }));
+const topRightHandleStyle = computed(() => ({
+    left: `${cropRect.x + cropRect.w}px`,
+    top: `${cropRect.y}px`
+}));
+const bottomLeftHandleStyle = computed(() => ({
+    left: `${cropRect.x}px`,
+    top: `${cropRect.y + cropRect.h}px`
+}));
 const bottomRightHandleStyle = computed(() => ({
     left: `${cropRect.x + cropRect.w}px`,
     top: `${cropRect.y + cropRect.h}px`
@@ -531,17 +672,29 @@ const selectionHint = computed(() => {
     const top = Math.round(cropRect.y);
     const right = Math.round(cropRect.x + cropRect.w);
     const bottom = Math.round(cropRect.y + cropRect.h);
-    return `左上(${left}, ${top}) 右下(${right}, ${bottom})`;
+    return `左上(${left}, ${top}) 右上(${right}, ${top}) 左下(${left}, ${bottom}) 右下(${right}, ${bottom})`;
 });
 const magnifierStyle = computed(() => ({
     left: `${magnifierPos.x}px`,
     top: `${magnifierPos.y}px`
 }));
+onMounted(() => {
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+});
+onBeforeUnmount(() => {
+    document.removeEventListener('fullscreenchange', onFullscreenChange);
+});
 debugger; /* PartiallyEnd: #3632/scriptSetup.vue */
 const __VLS_ctx = {};
 let __VLS_components;
 let __VLS_directives;
+/** @type {__VLS_StyleScopedClasses['nudge-toolbar']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-toolbar']} */ ;
+/** @type {__VLS_StyleScopedClasses['hint-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['magnifier']} */ ;
+/** @type {__VLS_StyleScopedClasses['bead-grid-scroll']} */ ;
+/** @type {__VLS_StyleScopedClasses['fullscreen-host']} */ ;
+/** @type {__VLS_StyleScopedClasses['is-fullscreen']} */ ;
 /** @type {__VLS_StyleScopedClasses['bead-grid-scroll']} */ ;
 /** @type {__VLS_StyleScopedClasses['palette-btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['nudge-grid']} */ ;
@@ -551,19 +704,18 @@ let __VLS_directives;
 /** @type {__VLS_StyleScopedClasses['debug-panel']} */ ;
 /** @type {__VLS_StyleScopedClasses['debug-panel']} */ ;
 /** @type {__VLS_StyleScopedClasses['debug-panel']} */ ;
+/** @type {__VLS_StyleScopedClasses['section-head']} */ ;
+/** @type {__VLS_StyleScopedClasses['workbench-actions']} */ ;
+/** @type {__VLS_StyleScopedClasses['add-color-row']} */ ;
+/** @type {__VLS_StyleScopedClasses['manual-qty-input']} */ ;
+/** @type {__VLS_StyleScopedClasses['selection-row']} */ ;
+/** @type {__VLS_StyleScopedClasses['selection-coords']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-toolbar']} */ ;
+/** @type {__VLS_StyleScopedClasses['palette-wrap']} */ ;
 // CSS variable injection 
 // CSS variable injection end 
-__VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({});
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-    ...{ class: "row-between" },
-    ...{ style: {} },
-});
-__VLS_asFunctionalElement(__VLS_intrinsicElements.h3, __VLS_intrinsicElements.h3)({
-    ...{ style: {} },
-});
-__VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
-    ...{ onClick: (__VLS_ctx.saveColors) },
-    ...{ class: "btn success" },
+    ...{ class: "workbench" },
 });
 if (!__VLS_ctx.project.patternImage) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
@@ -583,35 +735,49 @@ if (!__VLS_ctx.project.patternImage) {
 }
 else {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "card" },
-        ...{ style: {} },
+        ...{ class: "card section-card" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "row-between" },
-        ...{ style: {} },
+        ...{ class: "row-between section-head" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.h4, __VLS_intrinsicElements.h4)({
-        ...{ style: {} },
+        ...{ class: "section-subtitle" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "row workbench-actions" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
         ...{ onClick: (__VLS_ctx.extractRequiredColorsBySelection) },
         ...{ class: "btn secondary" },
         disabled: (__VLS_ctx.extractingColors || !__VLS_ctx.project.patternImage || !__VLS_ctx.hasSelection),
     });
-    (__VLS_ctx.extractingColors ? '识别中...' : '按当前选区识别');
-    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "row" },
-        ...{ style: {} },
+    (__VLS_ctx.extractingColors ? '识别中...' : '识别');
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (__VLS_ctx.saveColors) },
+        ...{ class: "btn success" },
     });
-    __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({
-        ...{ style: {} },
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+        ...{ class: "hint-text" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "row add-color-row" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
-        type: "checkbox",
+        ...{ onKeyup: (__VLS_ctx.addManualColor) },
+        ...{ class: "input manual-code-input" },
+        placeholder: "手动新增色号（如 A1）",
     });
-    (__VLS_ctx.debugMode);
-    __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
-        ...{ style: {} },
+    (__VLS_ctx.manualCode);
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
+        ...{ onKeyup: (__VLS_ctx.addManualColor) },
+        ...{ class: "input manual-qty-input" },
+        type: "number",
+        min: "1",
+    });
+    (__VLS_ctx.manualQuantity);
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (__VLS_ctx.addManualColor) },
+        ...{ class: "btn secondary" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "table-wrap" },
@@ -681,26 +847,23 @@ else {
         (__VLS_ctx.debugResult.rawText || '（空）');
     }
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "card" },
-        ...{ style: {} },
+        ...{ class: "card section-card" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.h4, __VLS_intrinsicElements.h4)({
-        ...{ style: {} },
+        ...{ class: "section-subtitle" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "row" },
+        ...{ class: "row grid-settings-row" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
     __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
-        ...{ class: "input" },
-        ...{ style: {} },
+        ...{ class: "input compact-control" },
         type: "number",
     });
     (__VLS_ctx.rows);
     __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({});
     __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
-        ...{ class: "input" },
-        ...{ style: {} },
+        ...{ class: "input compact-control" },
         type: "number",
     });
     (__VLS_ctx.cols);
@@ -711,11 +874,7 @@ else {
     });
     (__VLS_ctx.analyzing ? '分析中...' : '分析网格');
     __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
-        ...{ style: {} },
-    });
-    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "card" },
-        ...{ style: {} },
+        ...{ class: "hint-text" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ onMousemove: (__VLS_ctx.onCropMouseMove) },
@@ -758,6 +917,32 @@ else {
                         return;
                     if (!(__VLS_ctx.hasSelection))
                         return;
+                    __VLS_ctx.onHandleMouseDown('TR', $event);
+                } },
+            ...{ class: "crop-handle" },
+            ...{ style: (__VLS_ctx.topRightHandleStyle) },
+        });
+    }
+    if (__VLS_ctx.hasSelection) {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ onMousedown: (...[$event]) => {
+                    if (!!(!__VLS_ctx.project.patternImage))
+                        return;
+                    if (!(__VLS_ctx.hasSelection))
+                        return;
+                    __VLS_ctx.onHandleMouseDown('BL', $event);
+                } },
+            ...{ class: "crop-handle" },
+            ...{ style: (__VLS_ctx.bottomLeftHandleStyle) },
+        });
+    }
+    if (__VLS_ctx.hasSelection) {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ onMousedown: (...[$event]) => {
+                    if (!!(!__VLS_ctx.project.patternImage))
+                        return;
+                    if (!(__VLS_ctx.hasSelection))
+                        return;
                     __VLS_ctx.onHandleMouseDown('BR', $event);
                 } },
             ...{ class: "crop-handle" },
@@ -776,49 +961,51 @@ else {
     });
     /** @type {typeof __VLS_ctx.magnifierCanvasRef} */ ;
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "row" },
-        ...{ style: {} },
+        ...{ class: "row selection-row" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ style: {} },
-    });
-    (__VLS_ctx.selectionHint);
-    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
-        ...{ onClick: (__VLS_ctx.resetSelection) },
-        ...{ class: "btn secondary" },
-    });
-    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "nudge-panel" },
-    });
-    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "row" },
-        ...{ style: {} },
+        ...{ class: "row nudge-toolbar" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({
-        ...{ style: {} },
+        ...{ class: "hint-text" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.select, __VLS_intrinsicElements.select)({
-        ...{ class: "select" },
-        ...{ style: {} },
+        ...{ class: "select compact-control" },
         value: (__VLS_ctx.selectedCorner),
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
         value: "TL",
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+        value: "TR",
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
+        value: "BL",
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.option, __VLS_intrinsicElements.option)({
         value: "BR",
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.label, __VLS_intrinsicElements.label)({
-        ...{ style: {} },
+        ...{ class: "hint-text" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.input)({
-        ...{ class: "input" },
-        ...{ style: {} },
+        ...{ class: "input compact-step" },
         type: "number",
         min: "1",
         max: "20",
     });
     (__VLS_ctx.nudgeStep);
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "hint-text selection-coords" },
+    });
+    (__VLS_ctx.selectionHint);
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (__VLS_ctx.resetSelection) },
+        ...{ class: "btn secondary compact-btn selection-reset" },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "nudge-panel" },
+    });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "nudge-grid" },
     });
@@ -855,15 +1042,31 @@ else {
         ...{ class: "btn secondary" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ style: {} },
+        ...{ class: "hint-text status-text" },
     });
     (__VLS_ctx.analyzeStatus);
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "card" },
+        ref: "fullscreenHostRef",
+        ...{ class: "card fullscreen-host" },
+        ...{ class: ({ 'is-fullscreen': __VLS_ctx.isGridFullscreen }) },
+    });
+    /** @type {typeof __VLS_ctx.fullscreenHostRef} */ ;
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "row-between section-head" },
     });
     __VLS_asFunctionalElement(__VLS_intrinsicElements.h4, __VLS_intrinsicElements.h4)({
-        ...{ style: {} },
+        ...{ class: "section-subtitle" },
     });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
+        ...{ onClick: (__VLS_ctx.toggleGridFullscreen) },
+        ...{ class: "btn secondary" },
+    });
+    (__VLS_ctx.isGridFullscreen ? '退出全屏' : '全屏查看图纸');
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "hint-text" },
+    });
+    (__VLS_ctx.rows);
+    (__VLS_ctx.cols);
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "palette-wrap" },
     });
@@ -901,26 +1104,71 @@ else {
     });
     /** @type {typeof __VLS_ctx.gridViewportRef} */ ;
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "indexed-grid" },
+        ...{ style: (__VLS_ctx.indexedGridStyle) },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "grid-corner" },
+        ...{ style: (__VLS_ctx.indexCornerStyle) },
+    });
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "grid-col-header" },
+        ...{ style: (__VLS_ctx.colHeaderStyle) },
+    });
+    for (const [colNumber] of __VLS_getVForSourceType((__VLS_ctx.colNumbers))) {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            key: (`col-${colNumber}`),
+            ...{ class: "grid-index-cell" },
+            ...{ style: (__VLS_ctx.indexCellStyle) },
+        });
+        (colNumber);
+    }
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "grid-row-header" },
+        ...{ style: (__VLS_ctx.rowHeaderStyle) },
+    });
+    for (const [rowNumber] of __VLS_getVForSourceType((__VLS_ctx.rowNumbers))) {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            key: (`row-${rowNumber}`),
+            ...{ class: "grid-index-cell" },
+            ...{ style: (__VLS_ctx.indexCellStyle) },
+        });
+        (rowNumber);
+    }
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "bead-grid-inner" },
         ...{ style: (__VLS_ctx.gridStyle) },
     });
     for (const [cell, idx] of __VLS_getVForSourceType((__VLS_ctx.cells))) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             key: (idx),
-            ...{ style: (__VLS_ctx.cellStyle(cell)) },
+            ...{ style: (__VLS_ctx.cellStyle(cell, idx)) },
         });
         (cell || '');
     }
 }
-/** @type {__VLS_StyleScopedClasses['row-between']} */ ;
-/** @type {__VLS_StyleScopedClasses['btn']} */ ;
-/** @type {__VLS_StyleScopedClasses['success']} */ ;
+/** @type {__VLS_StyleScopedClasses['workbench']} */ ;
 /** @type {__VLS_StyleScopedClasses['card']} */ ;
 /** @type {__VLS_StyleScopedClasses['card']} */ ;
+/** @type {__VLS_StyleScopedClasses['section-card']} */ ;
 /** @type {__VLS_StyleScopedClasses['row-between']} */ ;
+/** @type {__VLS_StyleScopedClasses['section-head']} */ ;
+/** @type {__VLS_StyleScopedClasses['section-subtitle']} */ ;
+/** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['workbench-actions']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
+/** @type {__VLS_StyleScopedClasses['btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['success']} */ ;
+/** @type {__VLS_StyleScopedClasses['hint-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['add-color-row']} */ ;
+/** @type {__VLS_StyleScopedClasses['input']} */ ;
+/** @type {__VLS_StyleScopedClasses['manual-code-input']} */ ;
+/** @type {__VLS_StyleScopedClasses['input']} */ ;
+/** @type {__VLS_StyleScopedClasses['manual-qty-input']} */ ;
+/** @type {__VLS_StyleScopedClasses['btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['secondary']} */ ;
 /** @type {__VLS_StyleScopedClasses['table-wrap']} */ ;
 /** @type {__VLS_StyleScopedClasses['table']} */ ;
 /** @type {__VLS_StyleScopedClasses['input']} */ ;
@@ -929,25 +1177,42 @@ else {
 /** @type {__VLS_StyleScopedClasses['warn']} */ ;
 /** @type {__VLS_StyleScopedClasses['debug-panel']} */ ;
 /** @type {__VLS_StyleScopedClasses['card']} */ ;
+/** @type {__VLS_StyleScopedClasses['section-card']} */ ;
+/** @type {__VLS_StyleScopedClasses['section-subtitle']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['grid-settings-row']} */ ;
 /** @type {__VLS_StyleScopedClasses['input']} */ ;
+/** @type {__VLS_StyleScopedClasses['compact-control']} */ ;
 /** @type {__VLS_StyleScopedClasses['input']} */ ;
+/** @type {__VLS_StyleScopedClasses['compact-control']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
-/** @type {__VLS_StyleScopedClasses['card']} */ ;
+/** @type {__VLS_StyleScopedClasses['hint-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-stage']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-image']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-mask']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
 /** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
+/** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
+/** @type {__VLS_StyleScopedClasses['crop-handle']} */ ;
 /** @type {__VLS_StyleScopedClasses['magnifier']} */ ;
 /** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['selection-row']} */ ;
+/** @type {__VLS_StyleScopedClasses['row']} */ ;
+/** @type {__VLS_StyleScopedClasses['nudge-toolbar']} */ ;
+/** @type {__VLS_StyleScopedClasses['hint-text']} */ ;
+/** @type {__VLS_StyleScopedClasses['select']} */ ;
+/** @type {__VLS_StyleScopedClasses['compact-control']} */ ;
+/** @type {__VLS_StyleScopedClasses['hint-text']} */ ;
+/** @type {__VLS_StyleScopedClasses['input']} */ ;
+/** @type {__VLS_StyleScopedClasses['compact-step']} */ ;
+/** @type {__VLS_StyleScopedClasses['hint-text']} */ ;
+/** @type {__VLS_StyleScopedClasses['selection-coords']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
+/** @type {__VLS_StyleScopedClasses['compact-btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['selection-reset']} */ ;
 /** @type {__VLS_StyleScopedClasses['nudge-panel']} */ ;
-/** @type {__VLS_StyleScopedClasses['row']} */ ;
-/** @type {__VLS_StyleScopedClasses['select']} */ ;
-/** @type {__VLS_StyleScopedClasses['input']} */ ;
 /** @type {__VLS_StyleScopedClasses['nudge-grid']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
@@ -957,11 +1222,26 @@ else {
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['secondary']} */ ;
+/** @type {__VLS_StyleScopedClasses['hint-text']} */ ;
+/** @type {__VLS_StyleScopedClasses['status-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['card']} */ ;
+/** @type {__VLS_StyleScopedClasses['fullscreen-host']} */ ;
+/** @type {__VLS_StyleScopedClasses['row-between']} */ ;
+/** @type {__VLS_StyleScopedClasses['section-head']} */ ;
+/** @type {__VLS_StyleScopedClasses['section-subtitle']} */ ;
+/** @type {__VLS_StyleScopedClasses['btn']} */ ;
+/** @type {__VLS_StyleScopedClasses['secondary']} */ ;
+/** @type {__VLS_StyleScopedClasses['hint-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['palette-wrap']} */ ;
 /** @type {__VLS_StyleScopedClasses['palette-btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['palette-btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['bead-grid-scroll']} */ ;
+/** @type {__VLS_StyleScopedClasses['indexed-grid']} */ ;
+/** @type {__VLS_StyleScopedClasses['grid-corner']} */ ;
+/** @type {__VLS_StyleScopedClasses['grid-col-header']} */ ;
+/** @type {__VLS_StyleScopedClasses['grid-index-cell']} */ ;
+/** @type {__VLS_StyleScopedClasses['grid-row-header']} */ ;
+/** @type {__VLS_StyleScopedClasses['grid-index-cell']} */ ;
 /** @type {__VLS_StyleScopedClasses['bead-grid-inner']} */ ;
 var __VLS_dollars;
 const __VLS_self = (await import('vue')).defineComponent({
@@ -970,6 +1250,8 @@ const __VLS_self = (await import('vue')).defineComponent({
             rows: rows,
             cols: cols,
             localColors: localColors,
+            manualCode: manualCode,
+            manualQuantity: manualQuantity,
             cells: cells,
             selectedCode: selectedCode,
             analyzing: analyzing,
@@ -981,11 +1263,21 @@ const __VLS_self = (await import('vue')).defineComponent({
             patternImgRef: patternImgRef,
             magnifierCanvasRef: magnifierCanvasRef,
             gridViewportRef: gridViewportRef,
+            fullscreenHostRef: fullscreenHostRef,
             selectedCorner: selectedCorner,
             nudgeStep: nudgeStep,
             magnifierVisible: magnifierVisible,
             isGridPanning: isGridPanning,
+            isGridFullscreen: isGridFullscreen,
+            addManualColor: addManualColor,
             gridStyle: gridStyle,
+            rowNumbers: rowNumbers,
+            colNumbers: colNumbers,
+            indexedGridStyle: indexedGridStyle,
+            colHeaderStyle: colHeaderStyle,
+            rowHeaderStyle: rowHeaderStyle,
+            indexCellStyle: indexCellStyle,
+            indexCornerStyle: indexCornerStyle,
             cellStyle: cellStyle,
             analyzeGrid: analyzeGrid,
             extractRequiredColorsBySelection: extractRequiredColorsBySelection,
@@ -1000,10 +1292,13 @@ const __VLS_self = (await import('vue')).defineComponent({
             onGridMouseDown: onGridMouseDown,
             onGridMouseMove: onGridMouseMove,
             onGridMouseUp: onGridMouseUp,
+            toggleGridFullscreen: toggleGridFullscreen,
             hasSelection: hasSelection,
             paletteCodes: paletteCodes,
             cropRectStyle: cropRectStyle,
             topLeftHandleStyle: topLeftHandleStyle,
+            topRightHandleStyle: topRightHandleStyle,
+            bottomLeftHandleStyle: bottomLeftHandleStyle,
             bottomRightHandleStyle: bottomRightHandleStyle,
             selectionHint: selectionHint,
             magnifierStyle: magnifierStyle,

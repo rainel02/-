@@ -1,0 +1,62 @@
+{
+  "name": "pindou-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.cjs",
+  "description": "拼豆桌面版打包工程（Electron + Spring Boot + Vue）",
+  "scripts": {
+    "start": "electron .",
+    "dev": "cross-env ELECTRON_DEV_URL=http://127.0.0.1:5173 electron .",
+    "build:all": "node scripts/build-all.cjs",
+    "prepare:resources": "node scripts/prepare-resources.cjs",
+    "pack": "npm run build:all && npm run prepare:resources && electron-builder --dir",
+    "dist": "npm run build:all && npm run prepare:resources && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "http-proxy-middleware": "^3.0.3"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.pindou.desktop",
+    "productName": "拼豆助手",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "app-resources",
+        "to": "app-resources",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

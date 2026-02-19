@@ -2,6 +2,7 @@ import { api } from './client';
 export const beadApi = {
     list: () => api.get('/beads'),
     tags: () => api.get('/beads/tags'),
+    deleteTag: (tag) => api.delete(`/beads/tags/${encodeURIComponent(tag)}`),
     detail: (id) => api.get(`/beads/${id}`),
     create: (payload) => api.post('/beads', payload),
     update: (id, payload) => api.put(`/beads/${id}`, payload),

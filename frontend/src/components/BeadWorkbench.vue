@@ -19,6 +19,22 @@
           </label>
         </div> -->
         <p class="hint-text">先在下方图纸中框选“色号+数量”区域，再点击“识别”。</p>
+        <div class="row add-color-row">
+          <input
+            class="input manual-code-input"
+            v-model="manualCode"
+            placeholder="手动新增色号（如 A1）"
+            @keyup.enter="addManualColor"
+          />
+          <input
+            class="input manual-qty-input"
+            type="number"
+            min="1"
+            v-model.number="manualQuantity"
+            @keyup.enter="addManualColor"
+          />
+          <button class="btn secondary" @click="addManualColor">添加色号</button>
+        </div>
         <div class="table-wrap" style="max-height:260px;">
           <table class="table">
             <thead><tr><th>色号</th><th>数量</th><th></th></tr></thead>
@@ -179,6 +195,8 @@ const props = defineProps<{ project: BeadProject }>()
 const rows = ref(20)
 const cols = ref(20)
 const localColors = ref<ColorRequirement[]>([])
+const manualCode = ref('')
+const manualQuantity = ref<number>(1)
 const cells = ref<string[]>([])
 const selectedCode = ref<string | null>(null)
 const analyzing = ref(false)
@@ -238,6 +256,30 @@ function getContrastColor(hex: string) {
   const b = Number.parseInt(cleaned.slice(4, 6), 16)
   const brightness = (r * 299 + g * 587 + b * 114) / 1000
   return brightness > 125 ? '#111827' : '#ffffff'
+}
+
+function addManualColor() {
+  const code = normalizeColorCode(manualCode.value || '')
+  const quantity = Number(manualQuantity.value)
+  if (!code) {
+    alert('请输入色号')
+    return
+  }
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    alert('数量必须大于 0')
+    return
+  }
+
+  const existing = localColors.value.find(item => normalizeColorCode(item.code || '') === code)
+  if (existing) {
+    existing.code = code
+    existing.quantity = Number(existing.quantity || 0) + quantity
+  } else {
+    localColors.value.push({ code, quantity })
+  }
+
+  manualCode.value = ''
+  manualQuantity.value = 1
 }
 
 watch(
@@ -944,6 +986,22 @@ onBeforeUnmount(() => {
   margin: 0 0 8px 0;
 }
 
+.add-color-row {
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: nowrap;
+}
+
+.manual-code-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.manual-qty-input {
+  width: 96px;
+}
+
 .grid-settings-row {
   flex-wrap: wrap;
 }
@@ -1236,6 +1294,14 @@ onBeforeUnmount(() => {
   .workbench-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  .add-color-row {
+    flex-wrap: wrap;
+  }
+
+  .manual-qty-input {
+    width: 120px;
   }
 
   .selection-row {

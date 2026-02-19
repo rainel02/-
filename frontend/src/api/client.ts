@@ -1,4 +1,13 @@
-const API_BASE = '/api'
+declare global {
+  interface Window {
+    pindouDesktop?: {
+      version?: string
+      apiBase?: string
+    }
+  }
+}
+
+const API_BASE = window.pindouDesktop?.apiBase || '/api'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {
