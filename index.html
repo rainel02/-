@@ -1,0 +1,2369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>拼豆助手</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f4f4f9; }
+        h1, h2 { color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        
+        /* 布局 */
+        .stage { display: none; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 20px; }
+        .stage.active { display: block; }
+
+        .control-panel { margin-top: 15px; background: #fafafa; padding: 15px; border-radius: 5px; border: 1px solid #ddd; }
+        .input-group { margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+        .input-group label { min-width: 80px; font-weight: bold; }
+        .input-group input { padding: 5px; border: 1px solid #ccc; border-radius: 4px; }
+        
+        button { background-color: #4CAF50; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; transition: background 0.3s; }
+        button:hover { background-color: #45a049; }
+        button.secondary { background-color: #2196F3; }
+        button.secondary:hover { background-color: #0b7dda; }
+        button.danger { background-color: #f44336; }
+        
+        /* 画布区域 */
+        #canvas-container { position: relative; overflow: auto; border: 1px solid #ccc; max-height: 70vh; margin-top: 10px; }
+        canvas { cursor: crosshair; }
+        
+        /* 颜色列表输入区域 */
+        #color-inputs-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-top: 10px; }
+        .color-entry { display: flex; gap: 5px; align-items: center; background: #eee; padding: 5px; border-radius: 4px; }
+        .color-entry input { width: 60px; }
+        .color-preview-dot { width: 20px; height: 20px; border-radius: 50%; border: 1px solid #999; display: inline-block; }
+
+        /* 拼豆阶段 */
+        #palette { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
+        .palette-btn { 
+            padding: 8px 12px; 
+            border: 2px solid transparent; 
+            border-radius: 20px; 
+            cursor: pointer; 
+            display: flex; 
+            align-items: center; 
+            gap: 5px; 
+            color: #333; /* 默认深色字，后面会根据背景色调整 */
+            font-weight: bold;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        .palette-btn.active { border-color: #333; transform: scale(1.05); }
+        .palette-color-box { width: 16px; height: 16px; border: 1px solid rgba(0,0,0,0.1); }
+
+        #bead-grid { display: grid; gap: 1px; background-color: #ccc; margin-top: 20px; width: fit-content; }
+        .grid-cell { width: 20px; height: 20px; background-color: white; position: relative; }
+        .grid-cell.dimmed { opacity: 0.1; }
+        .grid-cell.highlight { opacity: 1; box-shadow: 0 0 5px rgba(0,0,0,0.5); z-index: 1; transform: scale(1.1); border: 1px solid #333; }
+        
+        /* 放大镜样式 */
+        #magnifier {
+            position: absolute;
+            width: 150px;
+            height: 150px;
+            border: 2px solid #007bff;
+            border-radius: 50%; /* 圆形 */
+            overflow: hidden;
+            display: none; /* 默认隐藏 */
+            background-color: white;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            z-index: 1000;
+            pointer-events: none; /* 让鼠标事件透过 */
+        }
+        #magnifier canvas {
+            width: 100%;
+            height: 100%;
+        }
+        /* 十字准星 */
+        #magnifier::after {
+            content: '';
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 10px; height: 1px;
+            background: rgba(255, 0, 0, 0.8);
+            transform: translate(-50%, -50%);
+        }
+        #magnifier::before {
+            content: '';
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 1px; height: 10px;
+            background: rgba(255, 0, 0, 0.8);
+            transform: translate(-50%, -50%);
+        }
+
+        /* 库存表分页 */
+        #inventory-panel { margin-top: 20px; }
+        #inventory-status { font-size: 12px; color: #555; margin: 8px 0; }
+        .sheet-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+        .sheet-tab {
+            background: #e9ecef;
+            border: 1px solid #ced4da;
+            color: #333;
+            padding: 6px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .sheet-tab.active {
+            background: #2196F3;
+            color: #fff;
+            border-color: #2196F3;
+        }
+        #inventory-table-wrap {
+            max-height: 60vh;
+            overflow: auto;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: #fff;
+        }
+        #inventory-table-wrap table {
+            width: max-content;
+            min-width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        #inventory-table-wrap th,
+        #inventory-table-wrap td {
+            border: 1px solid #e1e1e1;
+            padding: 6px 8px;
+            white-space: pre-wrap;
+            text-align: left;
+            vertical-align: top;
+        }
+        #inventory-table-wrap th {
+            position: sticky;
+            top: 0;
+            background: #f8f9fa;
+            z-index: 1;
+        }
+
+        #app-toast {
+            position: fixed;
+            right: 16px;
+            bottom: 16px;
+            max-width: 420px;
+            background: rgba(32, 33, 36, 0.94);
+            color: #fff;
+            padding: 10px 12px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.28);
+            font-size: 13px;
+            line-height: 1.4;
+            z-index: 99999;
+            display: none;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+
+<!-- 放大镜组件 -->
+<div id="magnifier"><canvas id="mag-canvas"></canvas></div>
+
+<div class="container">
+    <h1>拼豆辅助工具</h1>
+
+    <!-- 阶段 1: 准备 -->
+    <div id="stage-prepare" class="stage active">
+        <h2>阶段 1: 准备工作</h2>
+        
+        <div class="input-group">
+            <label>上传图片:</label>
+            <input type="file" id="image-upload" accept="image/*">
+        </div>
+
+        <div id="workspace" style="display:none;">
+            
+            <!-- 步骤 1.1: 识别色号 -->
+            <div class="control-panel">
+                <h3>1.1 提取色号与数量 (OCR / AI)</h3>
+                <p>在下方图片中框选包含色号说明的区域（例如 "B17 2"），然后点击识别。</p>
+                
+                <!-- 新增 AI 设置区域 -->
+                <div style="margin-bottom: 10px; padding: 10px; background: #eef; border-radius: 4px; border: 1px solid #ccd;">
+                    <details>
+                        <summary style="cursor: pointer; font-weight: bold; color: #444;">⚙️ 高级设置: OCR 引擎选择</summary>
+                        <div style="margin-top: 10px;">
+                            <label style="display:block; margin-bottom:5px;">选择引擎:</label>
+                            <select id="ocr-engine" style="width: 100%; padding: 5px; margin-bottom: 10px;" onchange="toggleOCREngine()">
+                                <option value="baidu" selected>百度智能云 OCR (默认推荐)</option>
+                                <option value="openai">OpenAI / Compatible (备用)</option>
+                                <option value="local">本地 Tesseract (离线)</option>
+                            </select>
+
+                            <!-- OpenAI Settings -->
+                            <div id="settings-openai" style="display:none;">
+                                <label style="display:block; margin-bottom:5px;">API Key:</label>
+                                <input type="password" id="ai-api-key" placeholder="sk-..." style="width: 100%; padding: 5px;">
+                                <label style="display:block; margin: 5px 0;">Base URL:</label>
+                                <input type="text" id="ai-base-url" value="https://api.openai.com/v1" style="width: 100%; padding: 5px;">
+                                <label style="display:block; margin: 5px 0;">Model:</label>
+                                <input type="text" id="ai-model" value="gpt-4o" placeholder="gpt-4o" style="width: 100%; padding: 5px;">
+                            </div>
+
+                            <!-- Baidu Settings -->
+                            <div id="settings-baidu" style="display:block;">
+                                <p style="font-size: 0.85em; color: #d32f2f; margin-bottom: 5px;">注意：百度API填一次即可同时用于"色号提取"和"网格分析"。</p>
+                                <label style="display:block; margin-bottom:5px;">API Key (AK):</label>
+                                <input type="text" id="baidu-api-key" placeholder="百度云应用 AK" style="width: 100%; padding: 5px;">
+                                <label style="display:block; margin: 5px 0;">Secret Key (SK):</label>
+                                <input type="password" id="baidu-secret-key" placeholder="百度云应用 SK" style="width: 100%; padding: 5px;">
+                                
+                                <section style="margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 5px;">
+                                    <details>
+                                        <summary style="font-size: 0.8em; color: #666; cursor: pointer;">备用 Key (可选 - 当主 Key 额度耗尽时自动切换)</summary>
+                                        <label style="display:block; margin: 5px 0; font-size: 0.8em;">备用 API Key:</label>
+                                        <input type="text" id="baidu-api-key-2" placeholder="备用 AK" style="width: 100%; padding: 5px;">
+                                        <label style="display:block; margin: 5px 0; font-size: 0.8em;">备用 Secret Key:</label>
+                                        <input type="password" id="baidu-secret-key-2" placeholder="备用 SK" style="width: 100%; padding: 5px;">
+                                    </details>
+                                </section>
+
+                                <div style="margin-top: 8px;">
+                                    <input type="checkbox" id="baidu-cors-proxy" checked>
+                                    <label for="baidu-cors-proxy">使用 CORS 代理 (解决 Failed to fetch)</label>
+                                    <p style="font-size: 0.8em; color: #666; margin: 2px 0 0 20px;">使用 cors-anywhere.herokuapp.com 转发请求</p>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
+                <div class="input-group">
+                    <button class="secondary" onclick="runOCR()">识别框选区域色号</button>
+                    <button onclick="addManualColor()">+ 手动添加</button>
+                </div>
+                <div id="color-inputs-container"></div>
+            </div>
+
+            <!-- 步骤 1.2: 均分网格 -->
+            <div class="control-panel">
+                <h3>1.2 网格设置与分析</h3>
+                <p>在图片中框选拼豆图案的主体区域（左上角到右下角）。</p>
+                <div class="input-group">
+                    <label>行数:</label>
+                    <input type="number" id="grid-rows" value="50">
+                    <label>列数:</label>
+                    <input type="number" id="grid-cols" value="50">
+                </div>
+                <div class="input-group">
+                    <button class="secondary" onclick="analyzeGrid()">生成网格并识别</button>
+                </div>
+                <div id="analysis-status"></div>
+            </div>
+
+            <button onclick="goToStage2()" style="margin-top: 20px; width: 100%; font-size: 1.1em; padding: 15px;">完成准备，开始拼豆 -></button>
+
+            <!-- 画布 -->
+            <div id="canvas-container">
+                <canvas id="main-canvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- 阶段 2: 拼豆 -->
+    <div id="stage-bead" class="stage">
+        <h2>阶段 2: 拼豆进行中</h2>
+        <button onclick="backToPrepare()" class="secondary" style="margin-bottom: 15px;">&lt; 返回编辑</button>
+        
+        <div id="palette"></div>
+        <div style="overflow: auto; max-height: 80vh; border: 1px solid #ccc; padding: 10px;">
+             <!-- 这里我们将绘制一个纯 DOM 的网格，或者继续使用 Canvas，考虑到高亮交互 DOM 可能更方便调试 CSS class -->
+             <div id="bead-display-area" style="position: relative;">
+                 <canvas id="display-canvas"></canvas>
+                 <div id="overlay-layer" style="position: absolute; top:0; left:0; pointer-events: none;"></div>
+             </div>
+        </div>
+    </div>
+
+    <div id="inventory-panel" class="control-panel">
+        <h2>库存表总览（Excel 多分页）</h2>
+        <p>自动读取同目录下的“拼豆库存表.xlsx”，并按工作表分页展示。</p>
+        <div class="input-group" style="flex-wrap: wrap;">
+            <button class="secondary" onclick="loadInventoryWorkbook()">重新加载库存表</button>
+            <button class="secondary" onclick="exportInventoryWorkbook()">导出更新后的 Excel</button>
+            <label style="min-width: auto;">手动选择文件:</label>
+            <input type="file" id="inventory-file-upload" accept=".xlsx,.xls">
+        </div>
+        <div id="inventory-status">正在初始化库存表...</div>
+        <div id="inventory-tabs" class="sheet-tabs"></div>
+        <div id="inventory-table-wrap"></div>
+    </div>
+
+</div>
+
+<script>
+// --- 非阻塞提示，避免最小化时浏览器被 alert 拉回前台 ---
+let __toastTimer = null;
+
+function showToast(message) {
+    let toast = document.getElementById('app-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'app-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = String(message || '');
+    toast.style.display = 'block';
+
+    if (__toastTimer) {
+        clearTimeout(__toastTimer);
+    }
+    __toastTimer = setTimeout(() => {
+        toast.style.display = 'none';
+    }, 4200);
+}
+
+window.alert = function(message) {
+    const text = String(message || '');
+    console.warn('[alert-toast]', text);
+    showToast(text);
+};
+
+// --- 数据准备 ---
+// 将 markdown 表格转换为 JS 对象
+// helper: 规范化色号 (去掉前导零, e.g. A01 -> A1)
+function normalizeColorCode(code) {
+    if (!code) return "";
+    let c = code.toUpperCase().trim();
+    // 强制转大写，并去除数字部分的无效前导零 (e.g. C02 -> C2, C10 -> C10)
+    // 只能匹配 "字母 + 0.. + 非0数字" 的形式，避免把 A10 变成 A1
+    // 如果是 C0 ? (一般没有，这里忽略)
+    return c.replace(/^([A-Z]+)0+(?=[1-9])/, '$1');
+}
+
+const colorDB = {};
+
+const rawColorData = `
+|A1||#FAF5CD|250 245 205|
+|A2||#FCFED6|252 254 214|
+|A3||#FCFF92|252 255 146|
+|A4||#F7EC5C|247 236 92|
+|A5||#FFE44B|255 228 75|
+|A6||#FDA951|253 169 81|
+|A7||#FA8C4F|250 140 79|
+|A8||#F9E045|249 224 69|
+|A9||#F99C5F|249 156 95|
+|A10||#F47E36|244 126 54|
+|A11||#FEDB99|254 219 153|
+|A12||#FDA276|253 162 118|
+|A13||#FEC667|254 198 103|
+|A14||#F85842|248 88 66|
+|A15||#FBF65E|251 246 94|
+|A16||#FEFF97|254 255 151|
+|A17||#FDE173|253 225 115|
+|A18||#FCBF80|252 191 128|
+|A19||#FD7E77|253 126 119|
+|A20||#F9D66E|249 214 110|
+|A21||#FAE393|250 227 147|
+|A22||#EDF878|237 248 120|
+|A23||#E1C9BD|225 201 189|
+|A24||#F3F6A9|243 246 169|
+|A25||#FFD785|255 215 133|
+|A26||#FEC832 |254 200 50|
+|B1||#DFF139|223 241 57|
+|B2||#64F343|100 243 67|
+|B3||#9FF685|159 246 133|
+|B4||#5FDF34|95 223 52|
+|B5||#39E158|57 225 88|
+|B6||#64BOA4|100 224 164|
+|B7||#3FAE7C|63 174 124|
+|B8||#1D9E54|29 158 84|
+|B9||#2A5037|42 80 55|
+|B10||#9AD1BA|154 209 186|
+|B11||#627032|98 112 50|
+|B12||#1A6E3D|2611061|
+|B13||#C8E87D|200 232  125|
+|B14||#ACE84C|172 232 76|
+|B15||#305335|48 83 53|
+|B16||#COED9C|192 237 156|
+|B17||#9FB33E|158 179 62|
+|B18||#E6ED4F|230 237 79|
+|B19||#26B78E|3 183 142|
+|B20||#CAEDCF|202 237 207|
+|B21||#176268|23 98 104|
+|B22||#0A4241|10 66 65|
+|B23||#343B1A|52 59 26|
+|B24||#E8FAA6|232 250 166|
+|B25||#4E846D|78 132 109|
+|B26||#907C35|144 124 53|
+|B27||#D0EOAF|208 224 175|
+|B28||#9EE5BB|158 229 187|
+|B29||#C6DF5F|198 223 95|
+|B30||#E3FBB1|227 251 177|
+|B31||#B2F694|178 2301 48|
+|B32||#92AD60 |146 173 96|
+|C1||#FFFEE4|255 254 228|
+|C2||#ABF8FE|171 248 254|
+|C3||#9EE0F8|158 224 248|
+|C4||#44CDFB|68 205 251|
+|C5||#06ABE3|6 171 227|
+|C6||#54A7E9|84 167 233|
+|C7||#3977CC|57 119 204|
+|C8||#0F52BD|15 82 189|
+|C9||#3349C3|51 73 195|
+|C10||#3DBBE3|61 187 227|
+|C11||#2ADED3|42 222 211|
+|C12||#1E334E|30 51 78|
+|C13||#CDE7FE|205 231 254|
+|C14||#D6FDFC|214 253 252|
+|C15||#21C5C4|33 197 196|
+|C16||#1858A2|24 88 162|
+|C17||#02D1F3|2 209 243|
+|C18||#213244|33 50 68|
+|C19||#188690|24 134 144|
+|C20||#1A70A9|26 112 169|
+|C21||#BEDDFC|190 221 252|
+|C22||#6BB1BB|107 177 187|
+|C23||#C8E2F9|200 226 249|
+|C24||#7EC5F9|126 197 249|
+|C25||#A9E8E0|169 232 224|
+|C26||#42ADD1|66 173 209|
+|C27||#DODEEF|208 222 239|
+|C28||#BDCEED|189 206 237|
+|C29||#364A89 |54 74 137|
+|D1||#ACB7EF|172 183 239|
+|D2||#868DD3|134 141 211|
+|D3||#3653AF|54 83 175|
+|D4||#162C7E|22 44 126|
+|D5||#B34EC6|179 78 198|
+|D6||#B37BDC|179 123 220|
+|D7||#8758A9|135 88 169|
+|D8||#E3D2FE|227 210 254|
+|D9||#D6BAF5|214 186 245|
+|D10||#301A49|48 26 73|
+|D11||#BCBAE2|188 186 226|
+|D12||#DC99CE|220 153 206|
+|D13||#B5038F|181 3 143|
+|D14||#882893|136 40 147|
+|D15||#2F1E8E|47 30 142|
+|D16||#E2E4F0|226 228 240|
+|D17||#C7D3F9|199 211 249|
+|D18||#9A64B8|154 100 184|
+|D19||#D8C2D9|216 194 217|
+|D20||#9C34AD|156 52 173|
+|D21||#940595|148 5 149|
+|D22||#383995|56 57 149|
+|D23||#FADBF8|250 219 248|
+|D24||#768AE1|118 138 225|
+|D25||#4950C2|73 80 194|
+|D26||#D6C6EB |214 198 235|
+|E1||#F6D4CB|246 212 203|
+|E2||#FCC1DD|252 193 221|
+|E3||#F6BDE8|246 189 232|
+|E4||#E9639E|233 99 158|
+|E5||#F1559F|241 85 159|
+|E6||#BC4072|236 64 114|
+|E7||#C63674|198 54 116|
+|E8||#FDDBE9|253 219 233|
+|E9||#E575C7|229 117 199|
+|E10||#D33997|211 57 151|
+|E11||#F7DAD4|247 218 212|
+|E12||#F893BF|248 147 191|
+|E13||#B5026A|181 2 106|
+|E14||#FAD4BF|250 212 191|
+|E15||#F5C9CA|245 201 202|
+|E16||#FBF4EC|251 244 236|
+|E17||#F7E3EC|247 227 236|
+|E18||#FBCBDB|251 203 219|
+|E19||#F6BBD1|246 187 209|
+|E20||#D7C6CE|215 198 206|
+|E21||#C09DA4|192 157 164|
+|E22||#B58B9F|181 139 159|
+|E23||#937D8A|147 125 138|
+|E24||#DEBEE5 |222 190 229|
+|F1||#FF9280|255 146 128|
+|F2||#F73D48|247 61 72|
+|F3||#EF4D3E|239 77 62|
+|F4||#F92B40|249 43 64|
+|F5||#E30328|227 3 40|
+|F6||#913635|145 54 53|
+|F7||#911932|145 25 50|
+|F8||#BB0126|187 1 38|
+|F9||#B0677A|224 103 122|
+|F10||#874628|135 70 40|
+|F11||#6F321D|111 50 29|
+|F12||#F8516D|248 81 109|
+|F13||#F45C45|244 92 69|
+|F14||#FCADB2|252 173 178|
+|F15||#D50527|213 5 39|
+|F16||#F8COA9|248 192 169|
+|F17||#E89B7D|232 155 125|
+|F18||#D07E4A|208 126 74|
+|F19||#BE454A|190 69 74|
+|F20||#C69495|198 148 149|
+|F21||#F2BBC6|242 187 198|
+|F22||#F7C3D0|247 195 208|
+|F23||#EC806D|236 128 109|
+|F24||#E09DAF|224 157 175|
+|F25||#E84854 |232 72 84|
+|G1||#FFEAD3|255 228 211|
+|G2||#FCC6AC|252 198 172|
+|G3||#F1C4A5|241 196 165|
+|G4||#DCB387|220 179 135|
+|G5||#E7B34E|231 179 78|
+|G6||#F3A014|243 160 20|
+|G7||#98503A|152 80 58|
+|G8||#4B2B1C|75 43 28|
+|G9||#E4B685|228 182 133|
+|G10||#DA8C42|218 140 66|
+|G11||#DAC898|218 200 152|
+|G12||#FEC993|254 201 147|
+|G13||#B2714B|178 113 75|
+|G14||#8B684C|139 104 76|
+|G15||#F6F8E3|246 248 227|
+|G16||#F2D8C1|242 216 193|
+|G17||#79544E|121 84 78|
+|G18||#FFEAD6|255 228 214|
+|G19||#DD7D41|221 125 65|
+|G20||#A5452F|165 69 47|
+|G21||#B38561 |179 133 97|
+|H1||#FBFBFB|251 251 251|
+|H2||#FFFFFF|255 255 255|
+|H3||#B4B4B4|180 180 180|
+|H4||#878787|135 135 135|
+|H5||#464648|70 70 72|
+|H6||#2C2C2C|44 44 44|
+|H7||#010101|1 1 1|
+|H8||#E7D6DC|231 214 220|
+|H9||#EFEDEE|239 237 238|
+|H10||#ECEAEB|236 234 235|
+|H11||#CDCDCD|205 205 205|
+|H12||#FDF6EE|253 246 238|
+|H13||#F4EFD1|244 239 209|
+|H14||#CED7D4|206 215 212|
+|H15||#98A6A6|152 166 166|
+|H16||#1B1213|27 18 19|
+|H17||#F0EEEF|240 238 239|
+|H18||#FCFFF8|252 255 248|
+|H19||#F2EEE5|242 238 229|
+|H20||#96A09F|150 160 159|
+|H21||#F8FBE6|248 251 230|
+|H22||#CACADA|202 202 218|
+|H23||#9B9C94 |155 156 148|
+|M1||#BBC6B6|187 198 182|
+|M2||#909994|144 153 148|
+|M3||#697E30|105 126 128|
+|M4||#EOD4BC|224 212 188|
+|M5||#DOCBAE|208 203 174|
+|M6||#BOAA86|176 170 134|
+|M7||#BOA796|176 167 150|
+|M8||#AE8082|174 128 130|
+|M9||#A88764|168 135 100|
+|M10||#C6B2BB|198 178 187|
+|M11||#9D7693|157 118 147|
+|M12||#644B51|100 75 81|
+|M13||#C79266|199 146 102|
+|M14||#C37463|195 116 99|
+|M15||#747D7A|116 125 122|
+`;
+
+rawColorData.trim().split('\n').forEach(line => {
+    // 处理类似 |A1||#FAF5CD|250 245 205| 的行
+    // Split by | and filter empty
+    const parts = line.split('|').map(s => s.trim());
+    if (parts.length >= 4) {
+        const code = parts[1];
+        const hex = parts[3];
+        const rgbStr = parts[4];
+        
+        let rgb = [0,0,0];
+        // 尝试解析 RGB 字符串，有些可能有空格问题，如 "24412654" (看起来像连在一起了) 或 "250 245 205"
+        // 观察数据，像 A10 24412654 这种是 244, 126, 54 连在一起了还是怎么回事？
+        // 观察 A10 RGB: 244 126 54. 
+        // 让我们稍微智能一点匹配
+        if (rgbStr) {
+            // 如果有空格分隔
+            const spaceMatch = rgbStr.match(/(\d+)\s+(\d+)\s+(\d+)/);
+            if (spaceMatch) {
+                rgb = [parseInt(spaceMatch[1]), parseInt(spaceMatch[2]), parseInt(spaceMatch[3])];
+            } else {
+                // 如果没有空格，可能是定长或者连在一起？ A10: 24412654 -> 244, 126, 54? 
+                // A11: 254219153 -> 254, 219, 153
+                // 看起来是 3位3位或者混在一起，最简单的是用 Hex 转 RGB，因为 Hex 看起来更规范
+            }
+        }
+        
+        // 优先使用 Hex 转 RGB
+        if (hex && hex.startsWith('#')) {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            rgb = [r, g, b];
+        }
+
+        if (code) {
+            // 存入标准形式
+            const normCode = normalizeColorCode(code); 
+            // 如果 input 是 'C2'，normCode 如 'C2'
+            // 如果 input 是 'A01'，normCode 如 'A1' (假设原始数据里只有 clean keys)
+            
+            // 实际上 rawColorData 里的 key 都是 clean 的 (A1, A2...)
+            // 所以我们主要存这个 clean key
+            colorDB[normCode] = { hex, rgb };
+
+            // 额外存一份带前导0的别名，以兼容 OCR 可能读出的 "C02"
+            const match = normCode.match(/^([A-Z]+)(\d+)$/);
+            if (match) {
+                const prefix = match[1];
+                const num = match[2];
+                if (num.length === 1) {
+                    const padded = prefix + '0' + num;
+                    colorDB[padded] = { hex, rgb }; // map "C02" -> same color obj
+                }
+            }
+        }
+    }
+});
+
+// App State
+let appState = {
+    image: null,
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    selection: null, // {x, y, w, h}
+    isDragging: false,
+    dragStart: null,
+    detectedColors: [], // [{code: 'B17', count: 2, manual: false}]
+    grid: {
+        rows: 50,
+        cols: 50,
+        bounds: null, // {x, y, w, h}
+        cells: []     // row-major array of identified codes
+    }
+};
+
+let inventoryState = {
+    workbook: null,
+    sheets: [],
+    activeSheet: ''
+};
+
+function pushToDetected(code, count) {
+    if (!code || code.length > 6) return; // 稍微放宽长度限制
+    const existingIndex = appState.detectedColors.findIndex(c => c.code === code);
+    if (existingIndex >= 0) {
+        // AI 可能会多次返回，或者手动添加了
+        appState.detectedColors[existingIndex].count = count;
+    } else {
+        appState.detectedColors.push({code, count});
+    }
+}
+
+const canvas = document.getElementById('main-canvas');
+const ctx = canvas.getContext('2d');
+const fileInput = document.getElementById('image-upload');
+
+fileInput.addEventListener('change', handleImageUpload);
+
+// --- 画布操作逻辑 ---
+function handleImageUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const img = new Image();
+    img.onload = () => {
+        appState.image = img;
+        appState.scale = Math.min(800 / img.width, 600 / img.height); // 初始缩放适应屏幕
+        // 如果图片很小，不要放大太多
+        if(appState.scale > 1) appState.scale = 1;
+
+        canvas.width = img.width * appState.scale;
+        canvas.height = img.height * appState.scale;
+        
+        // 重置选区为全图，默认生成两个控制点
+        const w =  canvas.width;
+        const h = canvas.height;
+        appState.selection = {
+            x: w * 0.1, y: h * 0.1, 
+            w: w * 0.8, h: h * 0.8
+        };
+        appState.grid.bounds = null;
+        
+        document.getElementById('workspace').style.display = 'block';
+        drawCanvas();
+    };
+    img.src = URL.createObjectURL(file);
+}
+
+function drawCanvas() {
+    if (!appState.image) return;
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // 绘制图片
+    ctx.drawImage(appState.image, 0, 0, canvas.width, canvas.height);
+
+    // 绘制选框
+    if (appState.selection) {
+        const {x, y, w, h} = appState.selection;
+        
+        // 半透明遮罩层 (让非选区变暗)
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // 清除选区内部的遮罩
+        ctx.clearRect(x, y, w, h);
+        ctx.drawImage(appState.image, x/appState.scale, y/appState.scale, w/appState.scale, h/appState.scale, x, y, w, h);
+
+        ctx.strokeStyle = '#00ff00'; // 绿色边框更清晰
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, w, h);
+        
+        // 绘制控制点 (左上角，右下角)
+        drawHandle(x, y, 'TL');
+        drawHandle(x + w, y + h, 'BR');
+    }
+
+    // 绘制网格预览 (如果有且不是在拖动模式下覆盖)
+    if (appState.grid.bounds && !appState.isDraggingHandle) {
+        // 如果已经确定了 grid bounds，通常我们会重绘一次网格线。
+        // 为了避免混乱，这里可以只绘制简单的网格作为参考
+        // ... (保持原有网格绘制逻辑，但注意图层顺序)
+    }
+}
+
+function drawHandle(x, y, label) {
+    const r = 8;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#ff0000'; // 红色手柄
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    
+    // ctx.fillStyle = 'white';
+    // ctx.font = '10px Arial';
+    // ctx.fillText(label, x + 10, y - 10);
+}
+
+// 放大镜逻辑
+function updateMagnifier(mx, my, pageX, pageY) {
+    const magDiv = document.getElementById('magnifier');
+    const magCanvas = document.getElementById('mag-canvas');
+    if (!appState.isDraggingHandle) {
+        magDiv.style.display = 'none';
+        return;
+    }
+    
+    magDiv.style.display = 'block';
+    
+    // 放大镜跟随鼠标 (使用页面坐标)
+    magDiv.style.left = (pageX + 20) + 'px';
+    magDiv.style.top = (pageY + 20) + 'px';
+    
+    const zoom = 4; // 放大倍率
+    const size = 150; // 放大镜尺寸 (CSS px)
+    const sourceSize = size / zoom; // 原图中要截取的大小
+    
+    magCanvas.width = size;
+    magCanvas.height = size;
+    const mCtx = magCanvas.getContext('2d');
+    
+    // 绘制原图 (不包含遮罩和手柄)
+    // mx, my 是 canvas 坐标
+    
+    const sx = (mx / appState.scale) - (sourceSize / 2);
+    const sy = (my / appState.scale) - (sourceSize / 2);
+    
+    // 填充白色背景
+    mCtx.fillStyle = 'white';
+    mCtx.fillRect(0,0,size,size);
+
+    mCtx.drawImage(appState.image, 
+        sx, sy, sourceSize, sourceSize,
+        0, 0, size, size
+    );
+    
+    // 画一个十字准星 (红色, 1px)
+    mCtx.strokeStyle = 'rgba(255,0,0,0.8)';
+    mCtx.lineWidth = 1;
+    mCtx.beginPath();
+    mCtx.moveTo(size/2, 0); mCtx.lineTo(size/2, size);
+    mCtx.moveTo(0, size/2); mCtx.lineTo(size, size/2);
+    mCtx.stroke();
+}
+
+// 鼠标交互: 拖动控制点
+canvas.addEventListener('mousedown', e => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    // 检查是否点中了控制点 (半径 15px 容差)
+    const tolerance = 15;
+    const sel = appState.selection;
+    if (!sel) return;
+
+    // 左上角
+    const d1 = Math.sqrt((x - sel.x)**2 + (y - sel.y)**2);
+    // 右下角
+    const d2 = Math.sqrt((x - (sel.x + sel.w))**2 + (y - (sel.y + sel.h))**2);
+
+    if (d1 < tolerance) {
+        appState.isDraggingHandle = 'TL';
+    } else if (d2 < tolerance) {
+        appState.isDraggingHandle = 'BR';
+    } else {
+        if (x > sel.x && x < sel.x + sel.w && y > sel.y && y < sel.y + sel.h) {
+            appState.isDraggingHandle = 'MOVE';
+        } else {
+             return;
+        }
+    }
+    appState.dragStart = {x, y, initSel: {...sel}};
+    
+    // 初始显示放大镜 (如果是拖动角点)
+    if (appState.isDraggingHandle === 'TL' || appState.isDraggingHandle === 'BR') {
+        updateMagnifier(x, y, e.pageX, e.pageY);
+    }
+});
+
+canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    // 限制鼠标坐标在 Canvas 范围内 (处理移出边界的情况)
+    let mx = e.clientX - rect.left; 
+    let my = e.clientY - rect.top;
+    
+    // 约束 mx, my 在 [0, canvas.width/height] 之间
+    if (mx < 0) mx = 0;
+    if (my < 0) my = 0;
+    if (mx > canvas.width) mx = canvas.width;
+    if (my > canvas.height) my = canvas.height;
+    
+    // 更新鼠标样式
+    const sel = appState.selection;
+    if (sel && !appState.isDraggingHandle) {
+         // hovercheck logic (using clamp doesn't matter here)
+         const d1 = Math.sqrt((mx - sel.x)**2 + (my - sel.y)**2);
+         const d2 = Math.sqrt((mx - (sel.x + sel.w))**2 + (my - (sel.y + sel.h))**2);
+         if (d1 < 15 || d2 < 15) canvas.style.cursor = 'crosshair';
+         else if (mx > sel.x && mx < sel.x + sel.w && my > sel.y && my < sel.y + sel.h) canvas.style.cursor = 'move';
+         else canvas.style.cursor = 'default';
+    }
+
+    if (!appState.isDraggingHandle) return;
+
+    // 只有在拖动角点时才显示放大镜
+    if (appState.isDraggingHandle !== 'MOVE') {
+        updateMagnifier(mx, my, e.pageX, e.pageY);
+    } else {
+        document.getElementById('magnifier').style.display = 'none';
+        
+        // 移动模式下的位移计算 (用 clamp 后的值计算可能不跟手，用原始 clientX 比较好? 
+        // 不，移动模式通常希望跟手。边界限制在计算 newX/Y 时做即可)
+        // 为了平滑，移动计算我们用原始 event 差值比较好，这里 mx 已经被 clamp 了
+        // 重新获取原始偏移
+        const rawMx = e.clientX - rect.left;
+        const rawMy = e.clientY - rect.top;
+        
+        const dx = rawMx - appState.dragStart.x;
+        const dy = rawMy - appState.dragStart.y;
+        const init = appState.dragStart.initSel;
+        
+        let newX = init.x + dx;
+        let newY = init.y + dy;
+        
+        // 边界检查
+        if (newX < 0) newX = 0;
+        if (newY < 0) newY = 0;
+        if (newX + init.w > canvas.width) newX = canvas.width - init.w;
+        if (newY + init.h > canvas.height) newY = canvas.height - init.h;
+        
+        appState.selection.x = newX;
+        appState.selection.y = newY;
+        drawCanvas();
+        return;
+    }
+
+    // 角点拖动逻辑 (利用 clamp 后的 mx, my 自动吸附边界)
+    const init = appState.dragStart.initSel;
+
+    if (appState.isDraggingHandle === 'TL') {
+        // 拖动左上角
+        // 约束：不能超过右下角的当前位置 (right, bottom 是固定的参照点)
+        const right = init.x + init.w;
+        const bottom = init.y + init.h;
+        
+        // 确保不越过右下角 (保留最小 5px)
+        let newX = Math.min(mx, right - 5);
+        let newY = Math.min(my, bottom - 5);
+        
+        appState.selection.x = newX;
+        appState.selection.y = newY;
+        appState.selection.w = right - newX;
+        appState.selection.h = bottom - newY;
+    }
+    else if (appState.isDraggingHandle === 'BR') {
+        // 拖动右下角
+        // 参照点：左上角固定
+        const left = init.x;
+        const top = init.y;
+        
+        let newX = Math.max(mx, left + 5); 
+        let newY = Math.max(my, top + 5);
+        
+        appState.selection.w = newX - left;
+        appState.selection.h = newY - top;
+    }
+    
+    drawCanvas();
+});
+
+canvas.addEventListener('mouseup', e => {
+    appState.isDraggingHandle = null;
+    document.getElementById('magnifier').style.display = 'none';
+    
+    // 同样，grid bounds 更新可以在这里做，或者由用户点击按钮触发
+    // appState.grid.bounds = {...appState.selection};
+});
+
+
+function toggleOCREngine() {
+    const engine = document.getElementById('ocr-engine').value;
+    const openaiSettings = document.getElementById('settings-openai');
+    const baiduSettings = document.getElementById('settings-baidu');
+    
+    if (openaiSettings) openaiSettings.style.display = (engine === 'openai') ? 'block' : 'none';
+    if (baiduSettings) baiduSettings.style.display = (engine === 'baidu') ? 'block' : 'none';
+}
+
+async function runOCR() {
+    if (!appState.selection) {
+        alert("请先在图片上框选色号说明区域！");
+        return;
+    }
+
+    const engine = document.getElementById('ocr-engine').value;
+    
+    if (engine === 'baidu') {
+        await runBaiduOCR();
+    } else if (engine === 'openai') {
+        const apiKey = document.getElementById('ai-api-key').value.trim();
+        if (!apiKey) {
+            alert("请填写 OpenAI API Key");
+            return;
+        }
+        await runAIOCR(apiKey);
+    } else {
+        await runLocalOCR();
+    }
+}
+
+// 百度 OCR 调用 (支持 Key 轮询)
+async function runBaiduOCR() {
+    const keys = [];
+    const ak1 = document.getElementById('baidu-api-key').value.trim();
+    const sk1 = document.getElementById('baidu-secret-key').value.trim();
+    if (ak1 && sk1) keys.push({ ak: ak1, sk: sk1 });
+
+    const ak2 = document.getElementById('baidu-api-key-2').value.trim();
+    const sk2 = document.getElementById('baidu-secret-key-2').value.trim();
+    if (ak2 && sk2) keys.push({ ak: ak2, sk: sk2 });
+
+    const useProxy = document.getElementById('baidu-cors-proxy').checked;
+    const PROXY_URL = 'https://cors-anywhere.herokuapp.com/'; 
+
+    if (keys.length === 0) {
+        alert("请至少填写一组百度云 API Key 和 Secret Key");
+        return;
+    }
+
+    const OCR_BTN = document.querySelector('button[onclick="runOCR()"]');
+    const originalText = OCR_BTN.textContent;
+    OCR_BTN.textContent = "百度 AI 处理中...";
+    OCR_BTN.disabled = true;
+
+    try {
+        // 1. 获取选区 Base64
+        const tempCanvas = document.createElement('canvas'); 
+        tempCanvas.width = appState.selection.w;
+        tempCanvas.height = appState.selection.h;
+        const tCtx = tempCanvas.getContext('2d');
+        tCtx.drawImage(canvas, 
+            appState.selection.x, appState.selection.y, appState.selection.w, appState.selection.h,
+            0, 0, appState.selection.w, appState.selection.h
+        );
+        
+        const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.9);
+        const base64Image = dataUrl.split(',')[1];
+        
+        // --- 递归重试机制 ---
+        const callBaidu = async (keyIndex) => {
+            if (keyIndex >= keys.length) {
+                throw new Error("所有 Key 均已尝试，配额耗尽或无效。");
+            }
+            
+            const currentKey = keys[keyIndex];
+            console.log(`Trying Baidu Key set ${keyIndex + 1}...`);
+
+            try {
+                // 2. 获取 Access Token
+                let tokenUrl = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${currentKey.ak}&client_secret=${currentKey.sk}`;
+                if (useProxy) tokenUrl = PROXY_URL + tokenUrl;
+                
+                const tokenResp = await fetch(tokenUrl, { 
+                    method: 'POST',
+                    headers: useProxy ? { 'X-Requested-With': 'XMLHttpRequest' } : {}
+                });
+
+                if (!tokenResp.ok) throw new Error(`Token fetch failed: ${tokenResp.status}`);
+                
+                const tokenData = await tokenResp.json();
+                if (tokenData.error) throw new Error(tokenData.error_description);
+                
+                const accessToken = tokenData.access_token;
+
+                // 3. 调用文字识别
+                let ocrUrl = `https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic?access_token=${accessToken}`;
+                if (useProxy) ocrUrl = PROXY_URL + ocrUrl;
+                
+                const ocrResp = await fetch(ocrUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        ...(useProxy ? { 'X-Requested-With': 'XMLHttpRequest' } : {})
+                    },
+                    body: `image=${encodeURIComponent(base64Image)}&detect_direction=false&probability=false`
+                });
+
+                const ocrData = await ocrResp.json();
+
+                // 检查具体错误码
+                // 17 = Open api daily request limit reached
+                // 18 = Open api qps request limit reached
+                // 19 = Open api total request limit reached
+                if (ocrData.error_code === 17 || ocrData.error_code === 19) {
+                     console.warn(`Key set ${keyIndex+1} limit reached (Code ${ocrData.error_code}). Switching to next key...`);
+                     return await callBaidu(keyIndex + 1); // 递归调用下一个 key
+                }
+
+                if (ocrData.error_code) {
+                    throw new Error(`OCR 失败 [${ocrData.error_code}]: ${ocrData.error_msg}`);
+                }
+                
+                return ocrData; // 成功返回
+            } catch (err) {
+                 // 如果是网络层面的失败 (不是额度不足)，可能不应该重试 key，而是直接报错？
+                 // 或者也可以激进地试下一个 key
+                 console.error(`Key set ${keyIndex+1} failed:`, err);
+                 // 继续尝试下一个 key
+                 return await callBaidu(keyIndex + 1);
+            }
+        };
+
+        const ocrData = await callBaidu(0);
+        console.log("Baidu Final Result:", ocrData.words_result);
+        
+        // 4. 解析结果
+        const combinedText = ocrData.words_result.map(w => w.words).join(' ');
+        
+        // ----- 复用解析逻辑 (提取并清理) -----
+        const cleanText = combinedText
+            .replace(/[\r\n]+/g, ' ')
+            .replace(/[()]/g, ' ')
+            .replace(/[x×]\s*(\d+)/gi, ' $1')
+            .trim();
+            
+        const tokens = cleanText.split(/[\s,]+/).filter(t => t.length > 0);
+        
+        const results = [];
+        for (let i = 0; i < tokens.length; i++) {
+            let token = tokens[i];
+             // 修正 HO2 -> H02
+            if (/^[A-Z]/.test(token)) {
+                const firstChar = token[0];
+                const rest = token.slice(1).replace(/O/g, '0').replace(/o/g, '0').replace(/l/g, '1').replace(/I/g, '1');
+                token = firstChar + rest;
+            }
+            // 判定色号
+            if (/^[A-Z]{1,2}\d{1,4}$/i.test(token) && token.length <= 6) {
+                const code = token.toUpperCase();
+                let count = 1; 
+                if (i + 1 < tokens.length && /^\d+$/.test(tokens[i+1])) {
+                    count = parseInt(tokens[i+1]);
+                    i++; 
+                }
+                results.push({code, count});
+            }
+        }
+        // -------------------------------------
+
+        if (results.length > 0) {
+            results.forEach(item => pushToDetected(item.code, item.count));
+            renderColorInputs();
+            alert(`识别完成，共找到 ${results.length} 个色号。`);
+        } else {
+            alert("未能识别到有效数据，原始文本: " + combinedText);
+        }
+
+    } catch (err) {
+        console.error(err);
+        
+        let msg = "百度 OCR 错误: " + err.message;
+        
+        if (err.message.includes("Failed to fetch")) {
+            msg += "\n\n【重要提示：跨域被拦截】\n这是一项浏览器安全机制。您有以下3种解决方法：\n1. (推荐) 安装 Chrome 插件 'Allow CORS: Access-Control-Allow-Origin' 并开启。\n2. 点击高级设置中的 '使用 CORS 代理' 勾选框(可能不稳定)。\n3. 如果已勾选代理，请确保已在新页面激活了临时访问权限。";
+        }
+        
+        alert(msg);
+    } finally {
+        OCR_BTN.textContent = originalText;
+        OCR_BTN.disabled = false;
+    }
+}
+
+async function runAIOCR(apiKey) {
+    const OCR_BTN = document.querySelector('button[onclick="runOCR()"]');
+    const originalText = OCR_BTN.textContent;
+    OCR_BTN.textContent = "正在调用 AI 分析...";
+    OCR_BTN.disabled = true;
+    
+    // 裁剪选区图像
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = appState.selection.w;
+    tempCanvas.height = appState.selection.h;
+    const tCtx = tempCanvas.getContext('2d');
+    tCtx.drawImage(canvas, 
+        appState.selection.x, appState.selection.y, appState.selection.w, appState.selection.h,
+        0, 0, appState.selection.w, appState.selection.h
+    );
+    const base64Image = tempCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+
+    try {
+        const baseUrl = document.getElementById('ai-base-url').value.replace(/\/$/, '') || "https://api.openai.com/v1";
+        const model = document.getElementById('ai-model').value || "gpt-4o";
+
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: [
+                    {
+                        role: "user",
+                        content: [
+                            { type: "text", text: "Identify the bead color codes (e.g., A1, B17, H02) and their quantities from this image. Return a JSON array of objects with 'code' and 'count' keys. Example: [{\"code\": \"B17\", \"count\": 2}]. No markdown." },
+                            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+                        ]
+                    }
+                ],
+                max_tokens: 1000
+            })
+        });
+
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+
+        const content = data.choices[0].message.content.replace(/```json|```/g, '').trim();
+        let result = [];
+        try {
+            result = JSON.parse(content);
+        } catch (e) {
+            // 尝试提取 JSON 数组
+            const match = content.match(/\[.*\]/s);
+            if (match) result = JSON.parse(match[0]);
+        }
+
+        if (Array.isArray(result)) {
+            result.forEach(item => {
+                if(item.code) pushToDetected(item.code.toUpperCase(), item.count || 1);
+            });
+            renderColorInputs();
+            alert(`AI 识别完成，共找到 ${result.length} 个色号。`);
+        } else {
+            alert("AI 返回格式无法解析: " + content);
+        }
+
+    } catch (err) {
+        console.error(err);
+        alert("AI 识别出错: " + err.message);
+    } finally {
+        OCR_BTN.textContent = originalText;
+        OCR_BTN.disabled = false;
+    }
+}
+
+async function runLocalOCR() {
+    if (!appState.selection) {
+        alert("请先在图片上框选色号说明区域！");
+        return;
+    }
+
+    const OCR_BTN = document.querySelector('button[onclick="runOCR()"]');
+    const originalBtnText = OCR_BTN.textContent;
+    OCR_BTN.textContent = "图像处理中...";
+    OCR_BTN.disabled = true;
+
+    try {
+        // 1. 图像预处理：放大 + 灰度 + 对比度拉伸 (移除强制二值化，避免反色文字问题)
+        const tempCanvas = document.createElement('canvas');
+        // 进一步放大倍数至 2.5 倍，对于小字更友好
+        const scaleFactor = 2.5; 
+        const w = Math.floor(appState.selection.w * scaleFactor);
+        const h = Math.floor(appState.selection.h * scaleFactor);
+        
+        tempCanvas.width = w;
+        tempCanvas.height = h;
+        const tCtx = tempCanvas.getContext('2d');
+        
+        // 开启平滑处理，避免放大锯齿
+        tCtx.imageSmoothingEnabled = true;
+        tCtx.imageSmoothingQuality = 'high';
+        
+        tCtx.drawImage(canvas, 
+            appState.selection.x, appState.selection.y, appState.selection.w, appState.selection.h,
+            0, 0, w, h
+        );
+        
+        const imageData = tCtx.getImageData(0, 0, w, h);
+        const data = imageData.data;
+        
+        // 计算灰度并寻找亮度范围 (对比度拉伸准备)
+        let minVal = 255;
+        let maxVal = 0;
+        
+        for (let i = 0; i < data.length; i += 4) {
+            const gray = 0.2126 * data[i] + 0.7152 * data[i+1] + 0.0722 * data[i+2];
+            data[i] = data[i+1] = data[i+2] = gray; // 转灰度
+            if (gray < minVal) minVal = gray;
+            if (gray > maxVal) maxVal = gray;
+        }
+
+        // 对比度拉伸 (Normalization)
+        if (maxVal > minVal) {
+            for (let i = 0; i < data.length; i += 4) {
+                const gray = data[i];
+                const norm = (gray - minVal) * 255 / (maxVal - minVal);
+                data[i] = data[i+1] = data[i+2] = norm;
+            }
+        }
+        
+        tCtx.putImageData(imageData, 0, 0);
+        const dataUrlNormal = tempCanvas.toDataURL();
+
+        // --- 生成反色图像 (用于识别白底黑字的情况) ---
+        for (let i = 0; i < data.length; i += 4) {
+            // 直接反转
+            const val = 255 - data[i];
+            data[i] = data[i+1] = data[i+2] = val;
+        }
+        tCtx.putImageData(imageData, 0, 0);
+        const dataUrlInverted = tempCanvas.toDataURL();
+        
+        // --- 调试功能：显示预览 ---
+        let debugContainer = document.getElementById('ocr-debug-view');
+        if (!debugContainer) {
+            debugContainer = document.createElement('div');
+            debugContainer.id = 'ocr-debug-view';
+            debugContainer.style.margin = '10px 0';
+            debugContainer.style.border = '1px dashed #999';
+            debugContainer.style.padding = '5px';
+            debugContainer.innerHTML = '<small>OCR 调试预览 (正片/负片):</small><br>';
+            document.querySelector('.control-panel').appendChild(debugContainer);
+        }
+        
+        debugContainer.querySelectorAll('img').forEach(el => el.remove());
+        const img1 = new Image(); img1.src = dataUrlNormal; img1.style.height = '40px'; img1.style.marginRight = '5px';
+        const img2 = new Image(); img2.src = dataUrlInverted; img2.style.height = '40px';
+        debugContainer.appendChild(img1);
+        debugContainer.appendChild(img2);
+
+        OCR_BTN.textContent = "双重识别中...";
+
+        // 2. 运行 Tesseract (跑两次以覆盖黑底白字和白底黑字)
+        const worker = await Tesseract.createWorker('eng'); 
+        
+        await worker.setParameters({
+            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789()x\n', 
+            tessedit_pageseg_mode: '11', 
+        });
+
+        const res1 = await worker.recognize(dataUrlNormal);
+        const res2 = await worker.recognize(dataUrlInverted);
+        
+        console.log("OCR Normal:", res1.data.text);
+        console.log("OCR Inverted:", res2.data.text);
+        
+        // --- 核心修复：分别解析，避免跨图像结果的错误拼接 ---
+        // 比如 res1 结尾是 HO2，res2 开头是 24 (属于B22)，拼接后变成 HO2 24，导致配对错误
+        
+        const parseText = (rawText) => {
+            // 1. 清洗
+            let cleanText = rawText
+                .replace(/[\r\n]+/g, ' ')
+                .replace(/[()]/g, ' ')
+                .replace(/[x×]\s*(\d+)/gi, ' $1') // 优化：支持 'x' 后可能有空格 x 24
+                .trim();
+                
+            // 2. 分词
+            const tokens = cleanText.split(/[\s,]+/).filter(t => t.length > 0);
+            
+            const results = []; // [{code, count}]
+            
+            // 3. 智能修正与配对
+            for (let i = 0; i < tokens.length; i++) {
+                let token = tokens[i];
+                
+                // 修正常见 OCR 混淆: H02 被识别为 HO2
+                // 逻辑：如果看起来像色号（字母开头），尝试把后半部分的 O 换成 0
+                if (/^[A-Z]/.test(token)) {
+                    // 把 O 换成 0, 把 I 换成 1 (针对数字部分)
+                    // 简单做法：把所有 O 变成 0，除非它是开头字母
+                    const firstChar = token[0];
+                    const rest = token.slice(1).replace(/O/g, '0').replace(/o/g, '0').replace(/l/g, '1').replace(/I/g, '1');
+                    token = firstChar + rest;
+                }
+                
+                // 判定是否为色号: 字母(1-2位) + 数字(1-3位)
+                // 比如 A1, B17, H02, M10
+                if (/^[A-Z]{1,2}\d{1,4}$/i.test(token) && token.length <= 6) {
+                    const code = token.toUpperCase();
+                    let count = 1; // 默认 1
+                    
+                    // 尝试向后寻找数字
+                    // 仅当下一个 token 是纯数字时才配对
+                    if (i + 1 < tokens.length && /^\d+$/.test(tokens[i+1])) {
+                        count = parseInt(tokens[i+1]);
+                        i++; // 消费掉数字
+                    }
+                    
+                    results.push({code, count});
+                }
+            }
+            return results;
+        };
+
+        const detected1 = parseText(res1.data.text);
+        const detected2 = parseText(res2.data.text);
+        
+        console.log("Parsed 1:", detected1);
+        console.log("Parsed 2:", detected2);
+
+        // --- 合并策略 ---
+        // 两个结果集取并集，对于同一个色号，优先取有数量不为1的，或者取较大的（假设 OCR 漏读导致默认为1）
+        const finalMap = new Map();
+        
+        [...detected1, ...detected2].forEach(item => {
+            // 过滤无效色号 (比如只有 A 没有数字，或者库里肯定不存在的)
+            // 这里不做严格库验证，以免漏掉自定义色号，但可以做基本格式过滤
+            
+            if (finalMap.has(item.code)) {
+                // 如果已存在，比较 count
+                // 如果当前 item 有具体数量 (>1)，且原纪录是 1，则更新
+                // 如果两个都有数量，取最大值? 或者是相同的，不做改变
+                const old = finalMap.get(item.code);
+                if (item.count > 1 && old.count <= 1) {
+                    finalMap.set(item.code, item);
+                } else if (item.count > 1 && old.count > 1) {
+                     // 冲突了？比如一个识别成 24 一个 21，通常相信数字位数多的？
+                     // 暂取最大值
+                     if(item.count > old.count) finalMap.set(item.code, item);
+                }
+            } else {
+                finalMap.set(item.code, item);
+            }
+        });
+
+        // 写入结果
+        finalMap.forEach(item => pushToDetected(item.code, item.count));
+
+
+        // 2. 尝试配对孤立项 (处理表格 B17 H2 \n 2 3 的情况)
+        // 假设孤立的色号和孤立的数字是按顺序对应的
+        const pairCount = Math.min(orphanCodes.length, orphanNumbers.length);
+        for (let k = 0; k < pairCount; k++) {
+            pushToDetected(orphanCodes[k], orphanNumbers[k]);
+        }
+        
+        // 3. 处理剩下的孤立色号 (默认为1)
+        // 这些色号没有对应的数字
+        for (let k = pairCount; k < orphanCodes.length; k++) {
+            pushToDetected(orphanCodes[k], 1);
+        }
+
+        // 4.剩下的孤立数字被丢弃 (不知道对应谁)
+        
+        function pushToDetected(code, count) {
+            if (code.length > 5) return;
+            const existingIndex = appState.detectedColors.findIndex(c => c.code === code);
+            if (existingIndex >= 0) {
+                // 如果已经存在（可能是手动加的，或者重复识别），更新数量
+                // 也可以选择累加? 这里直接覆盖更新比较直观
+                appState.detectedColors[existingIndex].count = count;
+            } else {
+                appState.detectedColors.push({code, count});
+            }
+        }
+
+        const foundAny = appState.detectedColors.length > 0; 
+
+        if (!foundAny) {
+             alert("未识别到任何有效色号数据，请检查图片清晰度。");
+        }
+        
+        await worker.terminate();
+        renderColorInputs();
+        
+    } catch (err) {
+        console.error(err);
+        alert("OCR 识别失败，请尝试手动添加或调整选区。");
+    } finally {
+        OCR_BTN.textContent = originalBtnText;
+        OCR_BTN.disabled = false;
+    }
+}
+
+function renderColorInputs() {
+    const container = document.getElementById('color-inputs-container');
+    container.innerHTML = '';
+    
+    appState.detectedColors.forEach((item, index) => {
+        const div = document.createElement('div');
+        div.className = 'color-entry';
+        
+        const preview = document.createElement('span');
+        preview.className = 'color-preview-dot';
+        if (colorDB[item.code]) {
+            preview.style.backgroundColor = colorDB[item.code].hex;
+        }
+        
+        div.innerHTML = `
+            ${preview.outerHTML}
+            <input type="text" value="${item.code}" onchange="updateColor(${index}, 'code', this.value)" placeholder="色号">
+            <input type="number" value="${item.count}" onchange="updateColor(${index}, 'count', this.value)" placeholder="数量">
+            <button class="danger" onclick="removeColor(${index})" style="padding: 2px 6px;">×</button>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function addManualColor() {
+    appState.detectedColors.push({code: '', count: 0});
+    renderColorInputs();
+}
+
+function removeColor(index) {
+    appState.detectedColors.splice(index, 1);
+    renderColorInputs();
+}
+
+function updateColor(index, field, value) {
+    appState.detectedColors[index][field] = field === 'count' ? parseInt(value) : value.toUpperCase();
+    renderColorInputs();
+}
+
+// --- 1.2 网格分析 ---
+
+// 新增：提取调用 AI 获取 Grid 信息的辅助函数
+async function getGridCodesFromAI(base64Image, rows, cols) {
+    const apiKey = document.getElementById('ai-api-key').value;
+    if (!apiKey) return null;
+
+    const baseUrl = document.getElementById('ai-base-url').value.replace(/\/$/, '') || "https://api.openai.com/v1";
+    const model = document.getElementById('ai-model').value || "gpt-4o";
+
+    try {
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: model,
+                messages: [
+                    {
+                        role: "user",
+                        content: [
+                            { type: "text", text: `This is an image of a pixel art grid with ${rows} rows and ${cols} columns. 
+                            Please analyze each cell and transcribe the short alphanumeric code (e.g., '1', 'A1', '12', 'X') written inside it.
+                            Ignore cells that are empty or have no text.
+                            Return a JSON object with a single property 'cells' which is an array of objects. 
+                            Each object must have: 'r' (row index 0-${rows-1}), 'c' (col index 0-${cols-1}), and 'text' (the code string).
+                            Example: {"cells": [{"r":0,"c":0,"text":"A1"}, {"r":0,"c":1,"text":"12"}]}
+                            Do not include markdown formatting.` },
+                            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+                        ]
+                    }
+                ],
+                max_tokens: 4000
+            })
+        });
+
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+
+        const content = data.choices[0].message.content.replace(/```json|```/g, '').trim();
+        // 尝试解析 JSON
+        let result = null;
+         try {
+            result = JSON.parse(content);
+        } catch (e) {
+            const match = content.match(/\{.*\}/s);
+            if (match) result = JSON.parse(match[0]);
+        }
+        
+        if (result && Array.isArray(result.cells)) {
+            return result.cells; // [{r, c, text}]
+        }
+        return null;
+
+    } catch (err) {
+        console.error("AI Grid Analysis Error:", err);
+        return null;
+    }
+}
+
+async function analyzeGrid() {
+    if (!appState.selection) {
+        alert("请先框选拼豆图案区域！");
+        return;
+    }
+
+    // 锁定当前选区为网格边界
+    appState.grid.bounds = {...appState.selection};
+    drawCanvas(); // 重绘显示绿色网格线
+
+    const rows = parseInt(document.getElementById('grid-rows').value);
+    const cols = parseInt(document.getElementById('grid-cols').value);
+    appState.grid.rows = rows;
+    appState.grid.cols = cols;
+    appState.grid.cells = new Array(rows * cols).fill(null);
+
+    const statusEl = document.getElementById('analysis-status');
+    const analyzeBtn = document.querySelector('button[onclick="analyzeGrid()"]');
+    const originalBtnText = analyzeBtn ? analyzeBtn.textContent : "分析网格";
+    if(analyzeBtn) {
+        analyzeBtn.disabled = true;
+        analyzeBtn.textContent = "正在分析...";
+    }
+
+    statusEl.innerHTML = "正在进行图像处理...";
+
+    // 获取图像数据
+    const scale = appState.scale;
+    const realX = appState.grid.bounds.x / scale;
+    const realY = appState.grid.bounds.y / scale;
+    const realW = appState.grid.bounds.w / scale;
+    const realH = appState.grid.bounds.h / scale;
+    
+    // 创建图像处理用的 Canvas
+    const tempC = document.createElement('canvas');
+    tempC.width = realW;
+    tempC.height = realH;
+    const tCtx = tempC.getContext('2d');
+    tCtx.drawImage(appState.image, realX, realY, realW, realH, 0, 0, realW, realH);
+    const imgData = tCtx.getImageData(0, 0, realW, realH).data;
+
+    // --- OCR 策略选择：Baidu > OpenAI > 本地 ---
+    const gridOcrMap = new Map(); // key="r,c", value="TEXT"
+    const baiduAK = document.getElementById('baidu-api-key').value.trim();
+    const baiduSK = document.getElementById('baidu-secret-key').value.trim();
+    const hasAIKey = !!document.getElementById('ai-api-key').value.trim();
+
+    if (baiduAK && baiduSK && confirm("是否使用 百度智能云 OCR 进行网格内容高精度识别？\n(推荐：准确率远高于本地识别)")) {
+        statusEl.innerHTML = "正在调用 百度云 读取网格内容...";
+        const base64Grid = tempC.toDataURL('image/jpeg', 0.9).split(',')[1];
+        
+        await runBaiduGridOCR(base64Grid, baiduAK, baiduSK, realW, realH, rows, cols, gridOcrMap, tempC);
+        
+    } else if (hasAIKey && confirm("检测到已配置 OpenAI Key，是否使用 AI 进行网格识别？")) {
+         statusEl.innerHTML = "正在调用 AI 读取网格内容 (可能需要几十秒)...";
+         const base64Grid = tempC.toDataURL('image/jpeg', 0.8).split(',')[1];
+         
+         const aiCells = await getGridCodesFromAI(base64Grid, rows, cols);
+         
+         if (aiCells) {
+             aiCells.forEach(cell => {
+                 if (cell.r >= 0 && cell.r < rows && cell.c >= 0 && cell.c < cols && cell.text) {
+                     gridOcrMap.set(`${cell.r},${cell.c}`, cell.text.toUpperCase());
+                 }
+             });
+             console.log(`AI Grid Analysis returned ${aiCells.length} cells.`);
+             statusEl.innerHTML = `AI 识别完成，获取到 ${aiCells.length} 个数据点。正在匹配颜色...`;
+         } else {
+             statusEl.innerHTML = "AI 识别未返回有效结果，降级为尝试本地识别...";
+             await runLocalGridOCR(tempC, realW, realH, rows, cols, gridOcrMap);
+         }
+
+    } else {
+        // 使用本地 OCR (Tesseract)
+        statusEl.innerHTML = "正在运行本地 OCR 识别色号标记...";
+        await runLocalGridOCR(tempC, realW, realH, rows, cols, gridOcrMap);
+    }
+    
+    // 逻辑封装：百度 OCR (Grid Mode) - 支持双 Key 轮询
+    async function runBaiduGridOCR(base64Img, ak, sk, w, h, R, C, map, canvasSource) {
+         // Gather all available keys
+         const keys = [];
+         if (ak && sk) keys.push({ak, sk});
+         
+         const ak2 = document.getElementById('baidu-api-key-2').value.trim();
+         const sk2 = document.getElementById('baidu-secret-key-2').value.trim();
+         if (ak2 && sk2) keys.push({ ak: ak2, sk: sk2 });
+
+         if (keys.length === 0) {
+             alert("未找到有效的百度云 API Key。");
+             return;
+         }
+
+         const useProxy = document.getElementById('baidu-cors-proxy').checked;
+         let PROXY = 'https://cors-anywhere.herokuapp.com/'; 
+
+         // Define the recursive caller
+         const callBaidu = async (keyIndex) => {
+            if (keyIndex >= keys.length) {
+                throw new Error("所有 Key 均已尝试，配额耗尽或无效。");
+            }
+            const currentKey = keys[keyIndex];
+            console.log(`Grid Analysis: Trying Baidu Key set ${keyIndex + 1}...`);
+
+            try {
+                // 1. Get Token
+                let tokenUrl = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${currentKey.ak}&client_secret=${currentKey.sk}`;
+                if (useProxy) tokenUrl = PROXY + tokenUrl;
+
+                const tokenResp = await fetch(tokenUrl, { 
+                    method: 'POST',
+                    headers: useProxy ? { 'X-Requested-With': 'XMLHttpRequest' } : {}
+                });
+                
+                if (!tokenResp.ok) throw new Error(`Token fetch failed: ${tokenResp.status}`);
+                const tokenData = await tokenResp.json();
+                
+                if (tokenData.error) throw new Error("Baidu Token Error: " + tokenData.error_description);
+                const accessToken = tokenData.access_token;
+
+                // 2. Call OCR (Accurate with Location)
+                // 注意: Grid 分析需要坐标，所以必须用 accurate (含 location) 而不是 accurate_basic
+                let ocrUrl = `https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=${accessToken}`;
+                if (useProxy) ocrUrl = PROXY + ocrUrl;
+                
+                const response = await fetch(ocrUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        ...(useProxy ? { 'X-Requested-With': 'XMLHttpRequest' } : {})
+                    },
+                    body: `image=${encodeURIComponent(base64Img)}&detect_direction=false&probability=false&vertexes_location=false`
+                });
+
+                const ocrData = await response.json();
+
+                // Check for quota errors
+                if (ocrData.error_code === 17 || ocrData.error_code === 19) {
+                     console.warn(`Grid Analysis: Key set ${keyIndex+1} limit reached. Switching...`);
+                     return await callBaidu(keyIndex + 1); 
+                }
+                
+                if (ocrData.error_code) throw new Error(`Baidu OCR Error: ${ocrData.error_msg}`);
+                
+                return ocrData;
+
+            } catch (err) {
+                 console.error(`Grid Analysis: Key set ${keyIndex+1} failed:`, err);
+                 // If it's a fetch error (network), maybe don't switch keys? But for safety try next.
+                 return await callBaidu(keyIndex + 1);
+            }
+         };
+
+         try {
+            const ocrData = await callBaidu(0);
+
+            // 3. Map Results
+            console.log("Baidu Grid OCR Raw:", ocrData.words_result);
+            let count = 0;
+            if (ocrData.words_result) {
+                const cellW = w / C;
+                const cellH = h / R;
+
+                ocrData.words_result.forEach(item => {
+                    if (!item.location) return;
+                    
+                    // 1. 预处理文本：拆分粘连的色号
+                    // 常见的色号格式是字母+数字 (A1, B22, H02)
+                    // 有些情况中间可能有空格，有些可能没有
+                    // 我们使用正则全局匹配来提取所有可能的色号
+                    let rawText = item.words.toUpperCase().replace(/O/g, '0').replace(/I/g, '1'); // 基础纠错
+                    const matches = rawText.match(/[A-Z][0-9]{1,3}/g);
+
+                    if (!matches || matches.length === 0) {
+                         // 没有匹配到标准色号，可能是单个字母或数字的特殊情况，或者识别错误
+                         // 此时降级回单体处理逻辑，或者忽略
+                         return;
+                    }
+
+                    const subCount = matches.length;
+                    const loc = item.location;
+                    const centerY = loc.top + loc.height / 2; 
+
+                    // 2. 均匀分布逻辑
+                    // 假设这 subCount 个色号是均匀分布在 loc.left 到 loc.left + loc.width 之间的
+                    const step = loc.width / subCount;
+
+                    matches.forEach((code, index) => {
+                        // 计算当前这个子色号的估算中心点 X
+                        const centerX = loc.left + (step * index) + (step / 2);
+                        const c = Math.floor(centerX / cellW);
+                        const r = Math.floor(centerY / cellH);
+
+                        if (r >= 0 && r < R && c >= 0 && c < C) {
+                            map.set(`${r},${c}`, code);
+                            count++;
+                            console.log(`Baidu Raw: "${item.words}" Found: ${code} @ [${r},${c}] (Original: x=${loc.left}, w=${loc.width}, count=${subCount})`);
+                        }
+                    });
+                });
+            }
+            statusEl.innerHTML = `百度云识别完成，获取到 ${count} 个数据点。正在匹配颜色...`;
+
+         } catch(e) {
+             console.error(e);
+             statusEl.innerHTML = `百度云调用失败: ${e.message}。尝试本地识别...`;
+             await runLocalGridOCR(canvasSource, w, h, R, C, map);
+         }
+    }
+
+    // 逻辑封装：本地 OCR 过程
+    async function runLocalGridOCR(canvasSource, w, h, rCount, cCount, map) {
+        try {
+            const ocrScale = 2.0;
+            const ocrC = document.createElement('canvas');
+            ocrC.width = w * ocrScale;
+            ocrC.height = h * ocrScale;
+            const oCtx = ocrC.getContext('2d');
+            oCtx.drawImage(canvasSource, 0, 0, ocrC.width, ocrC.height);
+
+            const worker = await Tesseract.createWorker('eng');
+            await worker.setParameters({
+                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#',
+                tessedit_pageseg_mode: '11', 
+            });
+            
+            const { data: { words } } = await worker.recognize(ocrC.toDataURL());
+            await worker.terminate();
+            
+            words.forEach(wd => {
+                const cx = (wd.bbox.x0 + wd.bbox.x1) / 2 / ocrScale;
+                const cy = (wd.bbox.y0 + wd.bbox.y1) / 2 / ocrScale;
+                const c = Math.floor(cx / (w / cCount));
+                const r = Math.floor(cy / (h / rCount));
+                
+                if (r >= 0 && r < rCount && c >= 0 && c < cCount) {
+                    const text = wd.text.trim().toUpperCase();
+                    if (text.length >= 1 && text.length <= 5) {
+                        const key = `${r},${c}`;
+                        const existing = map.get(key);
+                        map.set(key, existing ? existing + text : text); 
+                    }
+                }
+            });
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    // --- Debug Output for User ---
+    console.log("Grid OCR Map:", gridOcrMap);
+    let debugText = "识别到的网格内容 (Grid OCR Results):\n";
+    let foundCount = 0;
+    
+    // Sort logic for display: Row then Col
+    const sortedKeys = Array.from(gridOcrMap.keys()).sort((a,b) => {
+        const [r1, c1] = a.split(',').map(Number);
+        const [r2, c2] = b.split(',').map(Number);
+        return r1 - r2 || c1 - c2;
+    });
+
+    sortedKeys.forEach(key => {
+        const val = gridOcrMap.get(key);
+        if (val) {
+            debugText += `[${key}] ${val}\n`;
+            foundCount++;
+        }
+    });
+    
+    // Create or update a debug text area in the UI if it doesn't exist
+    let gridDebugArea = document.getElementById('grid-ocr-debug');
+    if (!gridDebugArea) {
+        gridDebugArea = document.createElement('textarea');
+        gridDebugArea.id = 'grid-ocr-debug';
+        gridDebugArea.style.width = '100%';
+        gridDebugArea.style.height = '100px';
+        gridDebugArea.style.marginTop = '10px';
+        gridDebugArea.style.fontSize = '12px';
+        gridDebugArea.style.fontFamily = 'monospace';
+        document.getElementById('analysis-status').parentNode.appendChild(gridDebugArea);
+    }
+    gridDebugArea.value = debugText;
+    gridDebugArea.style.display = 'block';
+
+    statusEl.innerHTML = `正在进行双层认证匹配... (已识别 ${foundCount} 个文本标记)`;
+
+    // 1. 准备库存与策略
+    const inventory = {}; 
+    let useStrict = false;
+    
+    if (appState.detectedColors.length > 0) {
+        useStrict = true;
+        appState.detectedColors.forEach(c => {
+            if (colorDB[c.code]) {
+                inventory[c.code] = {
+                    rgb: colorDB[c.code].rgb,
+                    count: c.count,
+                    originalCount: c.count
+                };
+            }
+        });
+    }
+
+    const cellW = realW / cols;
+    const cellH = realH / rows;
+    
+    // --- 算法核心：基于信任度的网格填充 ---
+    // 策略：
+    // 1. 绝对信任 OCR：如果 Grid OCR 识别到了文字，且该文字存在于 1.1 的识别结果库中，直接填入该格子。
+    //    (无需比对颜色，因为 OCR 读到的文字比颜色采样更直接。)
+    // 2. 相对信任 OCR：如果 OCR 识别到了文字，但在库里找不到（识别错误），尝试模糊匹配库存。
+    // 3. 颜色降级：如果 OCR 为空，则回退到颜色距离最近匹配。
+    // 4. 空白处理：如果没有 OCR 且颜色极白，跳过。
+    
+    appState.grid.cells = new Array(rows * cols).fill(null);
+    let fillCount = 0;
+
+    // A. 构建快速查找表
+    const detectedSet = new Set(appState.detectedColors.map(c => c.code)); // e.g. {"B22", "H02"}
+    
+    // B. 开始遍历每个格子
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const idx = r * cols + c;
+            
+            // 1. 获取 OCR 内容
+            const ocrRaw = gridOcrMap.get(`${r},${c}`);
+            
+            // 2. 获取颜色
+            const cx = Math.floor((c + 0.5) * cellW);
+            const cy = Math.floor((r + 0.5) * cellH);
+            const i = (cy * tempC.width + cx) * 4;
+            const targetColor = [imgData[i], imgData[i+1], imgData[i+2]];
+            
+            // 判定是否是背景白 (无字且极白)
+            const isWhite = colorDistance(targetColor, [255, 255, 255]) < 30; // 阈值可调
+            
+            if (ocrRaw) {
+                // case 1: OCR 有值
+                // 尝试直接匹配库存
+                if (detectedSet.has(ocrRaw)) {
+                     // 完美匹配 -> 填入
+                     appState.grid.cells[idx] = ocrRaw;
+                     fillCount++;
+                     continue;
+                }
+                
+                // OCR 有值但没对上 (比如识别成 'B2' 但库里只有 'B22')
+                // 尝试纠错: 找库里最像的 text
+                let bestMatch = null;
+                let minEditDist = Infinity;
+                
+                for (const code of detectedSet) {
+                    // 简单的编辑距离或包含关系
+                    if (code.includes(ocrRaw) || ocrRaw.includes(code)) {
+                        bestMatch = code;
+                        break; // 找到包含关系的直接用
+                    }
+                    // 或者可以用 levenshtein，这里简化
+                }
+                
+                if (bestMatch) {
+                    appState.grid.cells[idx] = bestMatch;
+                    fillCount++;
+                    continue;
+                }
+                
+                // 实在对不上，可能是 OCR 读错行了或者读成了别的字符
+                // 此时 fall back 到颜色匹配，但在 debug 里记一笔
+                console.warn(`Grid [${r},${c}] OCR '${ocrRaw}' not found in inventory. Fallback to color.`);
+            } 
+            
+            // case 2: OCR 无值 (或 OCR 匹配失败)
+            if (isWhite) {
+                // 认为是空白背景
+                continue; 
+            }
+            
+            // 颜色匹配 (仅在 Detected Colors 里找)
+            let bestCode = null;
+            let minDiff = Infinity;
+            
+            // 如果 1.1 没识别到任何颜色，才全库匹配；否则只匹配 1.1 的结果
+            const candidateList = (detectedSet.size > 0) ? Array.from(detectedSet) : Object.keys(colorDB);
+            
+            for (const code of candidateList) {
+                const dbInfo = colorDB[code];
+                if (!dbInfo) continue;
+                const diff = colorDistance(targetColor, dbInfo.rgb);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    bestCode = code;
+                }
+            }
+            
+            // 颜色匹配如果不算太离谱 (比如 diff < 60)，就填入
+            // 白色的 diff 可能很大，所以前面已经 filter 过了
+            if (bestCode && minDiff < 80) {
+                 appState.grid.cells[idx] = bestCode;
+                 fillCount++;
+            }
+        }
+    }
+    
+    if(analyzeBtn) {
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = originalBtnText;
+    }
+    statusEl.innerHTML = `分析完成。<br>OCR 识别数: ${foundCount} <br>最终填充网格: ${fillCount} / ${rows*cols}`; 
+}
+
+function findClosestColor(targetRgb) {
+    let minDiff = Infinity;
+    let bestCode = null;
+
+    // 优先从已识别列表中匹配 (步骤 1.1)
+    const priorityList = appState.detectedColors.filter(c => colorDB[c.code]).map(c => c.code);
+    
+    // 如果没有识别到任何颜色，则全库匹配 (或者我们可以混合策略)
+    // 根据需求: "根据...进行二次验证"，暗示优先用 detectedColors
+    const candidateCodes = priorityList.length > 0 ? priorityList : Object.keys(colorDB);
+
+    for (const code of candidateCodes) {
+        const dbColor = colorDB[code];
+        if (!dbColor) continue;
+        
+        const diff = colorDistance(targetRgb, dbColor.rgb);
+        if (diff < minDiff) {
+            minDiff = diff;
+            bestCode = code;
+        }
+    }
+    
+    // 如果差异太大，可能不是有效格子？这里暂时不做阈值过滤，相信最近邻
+    return bestCode;
+}
+
+function colorDistance(rgb1, rgb2) {
+    // 简单的欧氏距离，可以用 CIELAB 优化但 HTML 简单点好
+    return Math.sqrt(
+        Math.pow(rgb1[0] - rgb2[0], 2) + 
+        Math.pow(rgb1[1] - rgb2[1], 2) + 
+        Math.pow(rgb1[2] - rgb2[2], 2)
+    );
+}
+
+
+// --- 阶段 2: 拼豆 ---
+
+function goToStage2() {
+    if (appState.grid.cells.length === 0 || !appState.grid.cells.some(c => c)) {
+        if(!confirm("尚未成功分析出网格中的颜色，确定要进入拼豆阶段吗？(将显示空白)")) return;
+    }
+    
+    document.getElementById('stage-prepare').classList.remove('active');
+    document.getElementById('stage-bead').classList.add('active');
+    
+    initStage2();
+}
+
+function backToPrepare() {
+    document.getElementById('stage-bead').classList.remove('active');
+    document.getElementById('stage-prepare').classList.add('active');
+}
+
+function initStage2() {
+    // 1. 生成调色板按钮
+    // 获取网格中实际用到的颜色，以及 1.1 中定义的颜色的并集
+    const gridColors = new Set(appState.grid.cells.filter(c => c));
+    appState.detectedColors.forEach(c => gridColors.add(c.code));
+    
+    const paletteContainer = document.getElementById('palette');
+    paletteContainer.innerHTML = '';
+
+    // "全部显示" 按钮
+    const allBtn = document.createElement('button');
+    allBtn.className = 'palette-btn active';
+    allBtn.innerText = "全部显示";
+    allBtn.onclick = () => highlightColor(null, allBtn);
+    paletteContainer.appendChild(allBtn);
+
+    gridColors.forEach(code => {
+        if (!colorDB[code]) return;
+        const btn = document.createElement('button');
+        btn.className = 'palette-btn';
+        const bg = colorDB[code].hex;
+        
+        // 计算亮度以决定文字颜色
+        const rgb = colorDB[code].rgb;
+        const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+        const textColor = brightness > 125 ? 'black' : 'white';
+
+        btn.style.backgroundColor = bg;
+        btn.style.color = textColor;
+        btn.style.borderColor = '#ddd'; // 边框
+        btn.innerHTML = `<span>${code}</span>`;
+        btn.onclick = () => highlightColor(code, btn);
+        paletteContainer.appendChild(btn);
+    });
+
+    // 2. 绘制网格
+    drawBeadGrid();
+}
+
+function drawBeadGrid() {
+    const canvas2 = document.getElementById('display-canvas');
+    const ctx2 = canvas2.getContext('2d');
+    
+    // 增加格子大小以容纳文字
+    const CELL_SIZE = 36; // 20 -> 36
+    const width = appState.grid.cols * CELL_SIZE;
+    const height = appState.grid.rows * CELL_SIZE;
+    
+    canvas2.width = width;
+    canvas2.height = height;
+    
+    ctx2.font = "10px Arial"; // 设置文字大小
+    ctx2.textAlign = "center";
+    ctx2.textBaseline = "middle";
+
+    // 绘制所有格子
+    appState.grid.cells.forEach((code, index) => {
+        const r = Math.floor(index / appState.grid.cols);
+        const c = index % appState.grid.cols;
+        
+        const x = c * CELL_SIZE;
+        const y = r * CELL_SIZE;
+        
+        // 1. 背景色
+        let bgColor = '#ffffff';
+        if (code && colorDB[code]) {
+            bgColor = colorDB[code].hex;
+        }
+        ctx2.fillStyle = bgColor;
+        ctx2.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+        
+        // 2. 边框
+        ctx2.strokeStyle = '#e0e0e0';
+        ctx2.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
+
+        // 3. 文字 (色号)
+        if (code) {
+             // 计算对比度颜色
+             let textColor = 'black';
+             if (colorDB[code]) {
+                 const rgb = colorDB[code].rgb;
+                 const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+                 textColor = brightness > 125 ? 'black' : 'white';
+             }
+             
+             ctx2.fillStyle = textColor;
+             // 为了显示清晰，可能需要截断过长的色号
+             ctx2.fillText(code, x + CELL_SIZE/2, y + CELL_SIZE/2, CELL_SIZE-2);
+        }
+    });
+}
+
+function highlightColor(targetCode, btnElement) {
+    // 更新按钮状态
+    document.querySelectorAll('.palette-btn').forEach(b => b.classList.remove('active'));
+    btnElement.classList.add('active');
+
+    // 使用 overlay 层做高亮/暗淡效果，避免重绘整个 canvas
+    const overlay = document.getElementById('overlay-layer');
+    overlay.innerHTML = ''; // 清空
+    
+    // 设置 Canvas 容器大小
+    const canvas2 = document.getElementById('display-canvas');
+    overlay.style.width = canvas2.width + 'px';
+    overlay.style.height = canvas2.height + 'px';
+
+    const CELL_SIZE = 36; // Sync with drawBeadGrid
+
+    // 如果 targetCode 为 null，显示全部 (清除遮罩)
+    if (!targetCode) {
+        return; 
+    }
+
+    // 创建一个半透明黑色遮罩覆盖全图
+    const mask = document.createElement('div');
+    mask.style.position = 'absolute';
+    mask.style.top = '0';
+    mask.style.left = '0';
+    mask.style.width = '100%';
+    mask.style.height = '100%';
+    mask.style.backgroundColor = 'rgba(0,0,0,0.6)'; // 变暗
+    mask.style.zIndex = '5';
+    overlay.appendChild(mask);
+    
+    const fragment = document.createDocumentFragment();
+
+    appState.grid.cells.forEach((code, index) => {
+        if (code === targetCode) {
+            const r = Math.floor(index / appState.grid.cols);
+            const c = index % appState.grid.cols;
+            
+            const div = document.createElement('div');
+            div.className = 'highlight-cell'; // Better for identifying if needed
+            div.style.position = 'absolute';
+            div.style.left = (c * CELL_SIZE) + 'px';
+            div.style.top = (r * CELL_SIZE) + 'px';
+            div.style.width = CELL_SIZE + 'px';
+            div.style.height = CELL_SIZE + 'px';
+            div.style.backgroundColor = colorDB[code].hex; // 保持原色
+            div.style.border = '2px solid yellow'; // 高亮边框
+            div.style.zIndex = '10';
+            div.style.boxSizing = 'border-box';
+            
+            // Add text for consistency
+            div.style.display = 'flex';
+            div.style.justifyContent = 'center';
+            div.style.alignItems = 'center';
+            div.style.fontSize = '10px';
+            div.style.fontFamily = 'Arial';
+            
+            // Contrast color for text
+            let textColor = 'black';
+             if (colorDB[code]) {
+                 const rgb = colorDB[code].rgb;
+                 const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+                 textColor = brightness > 125 ? 'black' : 'white';
+             }
+            div.style.color = textColor;
+            div.innerText = code;
+            
+            fragment.appendChild(div);
+        }
+    });
+    
+    overlay.appendChild(fragment);
+}
+
+function excelCellToText(value) {
+    if (value === null || value === undefined) return '';
+    return String(value);
+}
+
+function parseWorkbookToSheetData(workbook) {
+    const sheets = workbook.SheetNames.map(name => {
+        const ws = workbook.Sheets[name];
+        const rows = XLSX.utils.sheet_to_json(ws, {
+            header: 1,
+            defval: '',
+            raw: false
+        });
+
+        const normalizedRows = rows.map(r => Array.isArray(r) ? r.map(excelCellToText) : []);
+        let maxCols = 0;
+        normalizedRows.forEach(r => {
+            let end = r.length;
+            while (end > 0 && String(r[end - 1]).trim() === '') end--;
+            if (end > maxCols) maxCols = end;
+        });
+
+        return { name, rows: normalizedRows, maxCols };
+    });
+
+    inventoryState.workbook = workbook;
+    inventoryState.sheets = sheets;
+    inventoryState.activeSheet = sheets.length ? sheets[0].name : '';
+}
+
+function renderInventoryTabs() {
+    const tabsEl = document.getElementById('inventory-tabs');
+    tabsEl.innerHTML = '';
+
+    inventoryState.sheets.forEach(sheet => {
+        const btn = document.createElement('button');
+        btn.className = 'sheet-tab' + (sheet.name === inventoryState.activeSheet ? ' active' : '');
+        btn.textContent = sheet.name;
+        btn.onclick = () => {
+            inventoryState.activeSheet = sheet.name;
+            renderInventoryTabs();
+            renderInventoryTable(sheet.name);
+        };
+        tabsEl.appendChild(btn);
+    });
+}
+
+function renderInventoryTable(sheetName) {
+    const wrap = document.getElementById('inventory-table-wrap');
+    const sheet = inventoryState.sheets.find(s => s.name === sheetName);
+    if (!sheet) {
+        wrap.innerHTML = '<div style="padding:10px;color:#888;">未找到该分页数据。</div>';
+        return;
+    }
+
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const tbody = document.createElement('tbody');
+
+    const headRow = document.createElement('tr');
+    for (let c = 0; c < sheet.maxCols; c++) {
+        const th = document.createElement('th');
+        const text = sheet.rows[0] && sheet.rows[0][c] ? sheet.rows[0][c] : `列${c + 1}`;
+        th.textContent = text;
+        headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+
+    for (let r = 1; r < sheet.rows.length; r++) {
+        const tr = document.createElement('tr');
+        const row = sheet.rows[r] || [];
+        for (let c = 0; c < sheet.maxCols; c++) {
+            const td = document.createElement('td');
+            const value = row[c] || '';
+            td.textContent = value;
+            td.contentEditable = 'true';
+            td.dataset.sheet = sheetName;
+            td.dataset.row = String(r);
+            td.dataset.col = String(c);
+            td.addEventListener('input', onInventoryCellEdit);
+
+            // 第一列色号做色块提示
+            if (c === 0) {
+                const code = normalizeColorCode(String(value).toUpperCase());
+                if (colorDB[code]) {
+                    td.style.background = colorDB[code].hex;
+                    const rgb = colorDB[code].rgb;
+                    const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+                    td.style.color = brightness > 125 ? '#000' : '#fff';
+                    td.style.fontWeight = 'bold';
+                }
+            }
+
+            tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+    }
+
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    wrap.innerHTML = '';
+    wrap.appendChild(table);
+}
+
+function onInventoryCellEdit(e) {
+    const cell = e.currentTarget;
+    const sheetName = cell.dataset.sheet;
+    const row = parseInt(cell.dataset.row, 10);
+    const col = parseInt(cell.dataset.col, 10);
+    if (!sheetName || Number.isNaN(row) || Number.isNaN(col)) return;
+
+    const sheet = inventoryState.sheets.find(s => s.name === sheetName);
+    if (!sheet) return;
+
+    if (!sheet.rows[row]) sheet.rows[row] = [];
+    sheet.rows[row][col] = cell.textContent || '';
+
+    // 若编辑第一列色号，动态更新底色
+    if (col === 0) {
+        const code = normalizeColorCode(String(cell.textContent || '').toUpperCase());
+        if (colorDB[code]) {
+            cell.style.background = colorDB[code].hex;
+            const rgb = colorDB[code].rgb;
+            const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+            cell.style.color = brightness > 125 ? '#000' : '#fff';
+            cell.style.fontWeight = 'bold';
+        } else {
+            cell.style.background = '';
+            cell.style.color = '';
+            cell.style.fontWeight = '';
+        }
+    }
+}
+
+function exportInventoryWorkbook() {
+    if (!inventoryState.sheets || inventoryState.sheets.length === 0) {
+        alert('没有可导出的库存数据');
+        return;
+    }
+
+    const wb = XLSX.utils.book_new();
+    inventoryState.sheets.forEach(sheet => {
+        const rows = sheet.rows || [];
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, sheet.name || 'Sheet');
+    });
+
+    XLSX.writeFile(wb, '拼豆库存表.xlsx');
+}
+
+async function loadInventoryWorkbook() {
+    const statusEl = document.getElementById('inventory-status');
+    statusEl.textContent = '正在加载 Excel 文件...';
+
+    try {
+        const resp = await fetch(encodeURI('./拼豆库存表.xlsx'));
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const buf = await resp.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array' });
+        parseWorkbookToSheetData(wb);
+
+        renderInventoryTabs();
+        if (inventoryState.activeSheet) {
+            renderInventoryTable(inventoryState.activeSheet);
+        }
+
+        statusEl.textContent = `加载成功：共 ${inventoryState.sheets.length} 个分页（可直接在表格中编辑，点击“导出更新后的 Excel”保存）`;
+    } catch (err) {
+        console.error(err);
+        statusEl.textContent = '自动加载失败（通常是未通过本地服务器打开页面）。请使用“手动选择文件”或使用本地服务器打开。';
+        document.getElementById('inventory-table-wrap').innerHTML = '';
+        document.getElementById('inventory-tabs').innerHTML = '';
+    }
+}
+
+function bindInventoryFileInput() {
+    const input = document.getElementById('inventory-file-upload');
+    if (!input) return;
+
+    input.addEventListener('change', e => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+
+        const statusEl = document.getElementById('inventory-status');
+        statusEl.textContent = `正在读取: ${file.name}`;
+
+        const reader = new FileReader();
+        reader.onload = evt => {
+            try {
+                const wb = XLSX.read(evt.target.result, { type: 'array' });
+                parseWorkbookToSheetData(wb);
+                renderInventoryTabs();
+                if (inventoryState.activeSheet) {
+                    renderInventoryTable(inventoryState.activeSheet);
+                }
+                statusEl.textContent = `读取成功：共 ${inventoryState.sheets.length} 个分页`;
+            } catch (error) {
+                console.error(error);
+                statusEl.textContent = '文件读取失败，请确认是有效的 xlsx 文件';
+            }
+        };
+        reader.onerror = () => {
+            statusEl.textContent = '文件读取失败';
+        };
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+bindInventoryFileInput();
+loadInventoryWorkbook();
+
+</script>
+</body>
+</html>
