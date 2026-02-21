@@ -8,6 +8,7 @@ export interface ColorRequirement {
 export interface ColorExtractionDebugResult {
   colors: ColorRequirement[]
   strategy?: string
+  ocrServiceSummary?: string
   rawText?: string
   locationLines: string[]
   pairLogs: string[]
@@ -91,5 +92,6 @@ export interface GridAnalysisResult {
   cols: number
   ocrCount: number
   filledCount: number
+  ocrServiceSummary?: string
   cells: GridAnalysisCell[]
 }

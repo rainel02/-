@@ -1,16 +1,18 @@
 {
-  "name": "pindou-desktop",
-  "version": "0.1.0",
+  "name": "DouBan-desktop",
+  "version": "0.1.1",
   "private": true,
   "main": "main.cjs",
   "description": "拼豆桌面版打包工程（Electron + Spring Boot + Vue）",
+  "author": "rainel",
   "scripts": {
     "start": "electron .",
     "dev": "cross-env ELECTRON_DEV_URL=http://127.0.0.1:5173 electron .",
     "build:all": "node scripts/build-all.cjs",
     "prepare:resources": "node scripts/prepare-resources.cjs",
-    "pack": "npm run build:all && npm run prepare:resources && electron-builder --dir",
-    "dist": "npm run build:all && npm run prepare:resources && electron-builder --win nsis"
+    "pack": "npm run build:all && npm run prepare:resources && electron-builder --dir --publish never",
+    "dist": "npm run build:all && npm run prepare:resources && electron-builder --win nsis --publish never",
+    "dist:fast": "npm run build:all && npm run prepare:resources && electron-builder --win nsis --publish never --config.compression=store"
   },
   "dependencies": {
     "express": "^4.21.2",
@@ -23,7 +25,10 @@
   },
   "build": {
     "appId": "com.pindou.desktop",
-    "productName": "拼豆助手",
+    "productName": "豆伴",
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "compression": "normal",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -43,6 +48,7 @@
       }
     ],
     "win": {
+      "icon": "build/app.ico",
       "target": [
         {
           "target": "nsis",

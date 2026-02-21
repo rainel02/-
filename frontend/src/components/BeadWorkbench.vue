@@ -13,28 +13,12 @@
             <button class="btn success" @click="saveColors">保存</button>
           </div>
         </div>
-        <!-- <div class="row" style="margin:0 0 8px 0;">
+        <div class="row" style="margin:0 0 8px 0;">
           <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#6b7280;">
             <input type="checkbox" v-model="debugMode" /> 调试输出模式
           </label>
-        </div> -->
-        <p class="hint-text">先在下方图纸中框选“色号+数量”区域，再点击“识别”。</p>
-        <div class="row add-color-row">
-          <input
-            class="input manual-code-input"
-            v-model="manualCode"
-            placeholder="手动新增色号（如 A1）"
-            @keyup.enter="addManualColor"
-          />
-          <input
-            class="input manual-qty-input"
-            type="number"
-            min="1"
-            v-model.number="manualQuantity"
-            @keyup.enter="addManualColor"
-          />
-          <button class="btn secondary" @click="addManualColor">添加色号</button>
         </div>
+        <p class="hint-text">先在下方图纸中框选“色号+数量”区域，再点击“识别”。</p>
         <div class="table-wrap" style="max-height:260px;">
           <table class="table">
             <thead><tr><th>色号</th><th>数量</th><th></th></tr></thead>
@@ -42,7 +26,10 @@
               <tr v-for="(row, idx) in localColors" :key="idx">
                 <td><input class="input" v-model="row.code" /></td>
                 <td><input class="input" type="number" min="1" v-model.number="row.quantity" /></td>
-                <td><button class="btn warn" @click="localColors.splice(idx,1)">删</button></td>
+                <td class="color-action-col">
+                  <button class="icon-action-btn add" @click="insertColorRowAfter(idx)" title="新增一行">+</button>
+                  <button class="icon-action-btn remove" @click="removeColorRow(idx)" title="删除本行">×</button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -72,11 +59,11 @@
       <div class="card section-card">
         <h4 class="section-subtitle">网格设置与分析</h4>
         <div class="row grid-settings-row">
-          <label>行数</label><input class="input compact-control" type="number" v-model.number="rows" />
-          <label>列数</label><input class="input compact-control" type="number" v-model.number="cols" />
+          <label>行数</label><input class="input compact-control" type="number" v-model.number="inputRows" />
+          <label>列数</label><input class="input compact-control" type="number" v-model.number="inputCols" />
           <button class="btn secondary" @click="analyzeGrid" :disabled="analyzing || !project.patternImage">{{ analyzing ? '分析中...' : '分析网格' }}</button>
         </div>
-        <p class="hint-text">先拖动四个角控制点框选图案主体，再点击“分析网格”。</p>
+        <p class="hint-text">先拖动四个角控制点框选图案主体，再点击“分析网格”。输入行列仅在点击分析后生效。</p>
 
         <div
           ref="cropStageRef"
@@ -95,6 +82,38 @@
             <canvas ref="magnifierCanvasRef" width="150" height="150"></canvas>
           </div>
         </div>
+
+        <div
+          v-if="selectionPreviewVisible"
+          class="selection-preview-window"
+          :style="selectionPreviewWindowStyle"
+        >
+          <div class="selection-preview-header" @mousedown="startSelectionPreviewDrag($event)">
+            <span>选区预览</span>
+            <div class="selection-preview-header-actions">
+              <button class="selection-preview-reset" @click.stop="resetSelectionPreviewImage">重置图片位置/缩放</button>
+              <button class="selection-preview-close" @click.stop="selectionPreviewVisible = false">×</button>
+            </div>
+          </div>
+          <div
+            ref="selectionPreviewViewportRef"
+            class="selection-preview-viewport"
+            @wheel.prevent="onSelectionPreviewWheel"
+            @mousedown="startSelectionPreviewImageDrag($event)"
+          >
+            <img
+              v-if="selectionPreviewDataUrl"
+              :src="selectionPreviewDataUrl"
+              class="selection-preview-image"
+              :style="selectionPreviewImageStyle"
+              draggable="false"
+            />
+          </div>
+          <div class="selection-preview-resize-handle right" @mousedown.stop="startSelectionPreviewResize('right', $event)"></div>
+          <div class="selection-preview-resize-handle bottom" @mousedown.stop="startSelectionPreviewResize('bottom', $event)"></div>
+          <div class="selection-preview-resize-handle corner" @mousedown.stop="startSelectionPreviewResize('corner', $event)"></div>
+        </div>
+
         <div class="row selection-row">
           <div class="row nudge-toolbar">
             <label class="hint-text">微调角点</label>
@@ -128,7 +147,7 @@
           <button class="btn secondary" @click="toggleGridFullscreen">{{ isGridFullscreen ? '退出全屏' : '全屏查看图纸' }}</button>
         </div>
         <div class="hint-text">
-          图纸网格：{{ rows }} 行 × {{ cols }} 列（每 5 行/列加深边框）
+          图纸网格：{{ activeRows }} 行 × {{ activeCols }} 列（每 5 行/列加深边框）
         </div>
         <div class="palette-wrap">
           <button class="palette-btn" :class="{ active: selectedCode === null }" @click="selectedCode = null">全部显示</button>
@@ -140,11 +159,22 @@
             @click="selectedCode = code"
           >{{ code }}</button>
         </div>
+        <div class="row grid-edit-row">
+          <button class="btn secondary" @click="gridEditMode = !gridEditMode">{{ gridEditMode ? '退出编辑模式' : '进入编辑模式' }}</button>
+          <template v-if="gridEditMode">
+            <label>画笔色号</label>
+            <select class="select compact-control edit-select" v-model="editPaintCode">
+              <option value="">清空像素块</option>
+              <option v-for="code in paletteCodes" :key="`paint-${code}`" :value="code">{{ code }}</option>
+            </select>
+            <button class="btn success" @click="saveGridCells" :disabled="savingGrid">{{ savingGrid ? '保存中...' : '保存网格结果' }}</button>
+          </template>
+        </div>
         <div
           ref="gridViewportRef"
           class="bead-grid-scroll"
           :class="{ panning: isGridPanning }"
-          @wheel.prevent="onGridWheel"
+          @wheel.stop.prevent="onGridWheel"
           @mousedown="onGridMouseDown"
           @mousemove="onGridMouseMove"
           @mouseup="onGridMouseUp"
@@ -176,7 +206,10 @@
                 v-for="(cell, idx) in cells"
                 :key="idx"
                 :style="cellStyle(cell, idx)"
-              >{{ cell || '' }}</div>
+                @mousedown="onGridCellMouseDown(idx, $event)"
+                @mouseenter="onGridCellMouseEnter(idx)"
+                @mouseup="onGridCellMouseUp"
+              >{{ cellDisplayText(cell, idx) }}</div>
             </div>
           </div>
         </div>
@@ -192,15 +225,18 @@ import type { BeadProject, ColorExtractionDebugResult, ColorRequirement } from '
 
 const props = defineProps<{ project: BeadProject }>()
 
-const rows = ref(20)
-const cols = ref(20)
+const inputRows = ref(20)
+const inputCols = ref(20)
+const activeRows = ref(20)
+const activeCols = ref(20)
 const localColors = ref<ColorRequirement[]>([])
-const manualCode = ref('')
-const manualQuantity = ref<number>(1)
 const cells = ref<string[]>([])
 const selectedCode = ref<string | null>(null)
 const analyzing = ref(false)
 const extractingColors = ref(false)
+const gridEditMode = ref(false)
+const editPaintCode = ref('')
+const savingGrid = ref(false)
 const debugMode = ref(false)
 const debugResult = ref<ColorExtractionDebugResult | null>(null)
 const analyzeStatus = ref('尚未分析')
@@ -217,12 +253,22 @@ const activeHandle = ref<'TL' | 'TR' | 'BL' | 'BR' | null>(null)
 const selectedCorner = ref<'TL' | 'TR' | 'BL' | 'BR'>('BR')
 const nudgeStep = ref(1)
 const cropRect = reactive({ x: 0, y: 0, w: 0, h: 0 })
+const cropRectRatio = reactive({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 })
 const MIN_CROP_SIZE = 8
 const magnifierVisible = ref(false)
 const magnifierPos = reactive({ x: 0, y: 0 })
 let magnifierHideTimer: number | null = null
+const selectionPreviewVisible = ref(false)
+const selectionPreviewDataUrl = ref('')
+const selectionPreviewViewportRef = ref<HTMLDivElement | null>(null)
+const selectionPreviewWindow = reactive({ left: 80, top: 80, width: 420, height: 320 })
+const selectionPreviewImage = reactive({ scale: 1, x: 0, y: 0 })
+const selectionPreviewWindowDrag = reactive({ active: false, startX: 0, startY: 0, left: 0, top: 0 })
+const selectionPreviewResize = reactive({ active: false, direction: 'corner', startX: 0, startY: 0, width: 0, height: 0 })
+const selectionPreviewImageDrag = reactive({ active: false, startX: 0, startY: 0, x: 0, y: 0 })
 const isGridPanning = ref(false)
 const isGridFullscreen = ref(false)
+const isGridPainting = ref(false)
 const gridPanStart = reactive({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 })
 
 const RAW_COLOR_HEX: Record<string, string> = {
@@ -239,6 +285,22 @@ const RAW_COLOR_HEX: Record<string, string> = {
 
 function normalizeColorCode(code: string) {
   return code.toUpperCase().trim().replace(/^([A-Z]+)0+(?=[1-9])/, '$1')
+}
+
+function compareColorCode(leftCode: string, rightCode: string) {
+  const left = normalizeColorCode(leftCode || '')
+  const right = normalizeColorCode(rightCode || '')
+  const regex = /^([A-Z]+)(\d+)$/
+  const lm = left.match(regex)
+  const rm = right.match(regex)
+  if (lm && rm) {
+    const letterDiff = lm[1].localeCompare(rm[1], 'zh-CN')
+    if (letterDiff !== 0) {
+      return letterDiff
+    }
+    return Number(lm[2]) - Number(rm[2])
+  }
+  return left.localeCompare(right, 'zh-CN')
 }
 
 function getCodeHex(code: string) {
@@ -258,37 +320,27 @@ function getContrastColor(hex: string) {
   return brightness > 125 ? '#111827' : '#ffffff'
 }
 
-function addManualColor() {
-  const code = normalizeColorCode(manualCode.value || '')
-  const quantity = Number(manualQuantity.value)
-  if (!code) {
-    alert('请输入色号')
-    return
-  }
-  if (!Number.isFinite(quantity) || quantity <= 0) {
-    alert('数量必须大于 0')
-    return
-  }
+function insertColorRowAfter(index: number) {
+  const target = Math.max(0, Math.min(index + 1, localColors.value.length))
+  localColors.value.splice(target, 0, { code: '', quantity: 1 })
+}
 
-  const existing = localColors.value.find(item => normalizeColorCode(item.code || '') === code)
-  if (existing) {
-    existing.code = code
-    existing.quantity = Number(existing.quantity || 0) + quantity
-  } else {
-    localColors.value.push({ code, quantity })
-  }
-
-  manualCode.value = ''
-  manualQuantity.value = 1
+function removeColorRow(index: number) {
+  if (index < 0 || index >= localColors.value.length) return
+  localColors.value.splice(index, 1)
 }
 
 watch(
   () => props.project,
   async (v) => {
-    localColors.value = (v.requiredColors || []).map(c => ({ ...c }))
-    rows.value = v.gridRows && v.gridRows > 0 ? v.gridRows : rows.value
-    cols.value = v.gridCols && v.gridCols > 0 ? v.gridCols : cols.value
-    cells.value = parseGridCells(v.gridCellsJson, rows.value * cols.value)
+    localColors.value = (v.requiredColors || []).map(c => ({ ...c, code: normalizeColorCode(c.code || '') }))
+    const nextRows = v.gridRows && v.gridRows > 0 ? v.gridRows : activeRows.value
+    const nextCols = v.gridCols && v.gridCols > 0 ? v.gridCols : activeCols.value
+    inputRows.value = nextRows
+    inputCols.value = nextCols
+    activeRows.value = nextRows
+    activeCols.value = nextCols
+    cells.value = parseGridCells(v.gridCellsJson, activeRows.value * activeCols.value)
     await nextTick()
     initSelectionByCorners()
   },
@@ -297,15 +349,15 @@ watch(
 
 const gridStyle = computed(() => ({
   display: 'grid',
-  gridTemplateColumns: `repeat(${cols.value}, ${cellSize.value}px)`,
+  gridTemplateColumns: `repeat(${activeCols.value}, ${cellSize.value}px)`,
   gap: '0',
   background: '#d1d5db'
 }))
 
 const indexSize = computed(() => cellSize.value)
 
-const rowNumbers = computed(() => Array.from({ length: rows.value }, (_, index) => index + 1))
-const colNumbers = computed(() => Array.from({ length: cols.value }, (_, index) => index + 1))
+const rowNumbers = computed(() => Array.from({ length: activeRows.value }, (_, index) => index + 1))
+const colNumbers = computed(() => Array.from({ length: activeCols.value }, (_, index) => index + 1))
 
 const indexedGridStyle = computed(() => ({
   display: 'grid',
@@ -319,16 +371,16 @@ const colHeaderStyle = computed(() => ({
   gridColumn: '2',
   gridRow: '1',
   display: 'grid',
-  gridTemplateColumns: `repeat(${cols.value}, ${cellSize.value}px)`,
-  width: `${cols.value * cellSize.value}px`
+  gridTemplateColumns: `repeat(${activeCols.value}, ${cellSize.value}px)`,
+  width: `${activeCols.value * cellSize.value}px`
 }))
 
 const rowHeaderStyle = computed(() => ({
   gridColumn: '1',
   gridRow: '2',
   display: 'grid',
-  gridTemplateRows: `repeat(${rows.value}, ${cellSize.value}px)`,
-  height: `${rows.value * cellSize.value}px`
+  gridTemplateRows: `repeat(${activeRows.value}, ${cellSize.value}px)`,
+  height: `${activeRows.value * cellSize.value}px`
 }))
 
 const indexCellStyle = computed(() => ({
@@ -348,12 +400,12 @@ function cellStyle(code: string, index: number): CSSProperties {
   const isMatch = code === selectedCode.value
   const hex = code ? getCodeHex(code) : ''
   const textColor = hex ? getContrastColor(hex) : '#111827'
-  const row = Math.floor(index / cols.value)
-  const col = index % cols.value
+  const row = Math.floor(index / activeCols.value)
+  const col = index % activeCols.value
   const majorTop = row % 5 === 0
   const majorLeft = col % 5 === 0
-  const isLastRow = row === rows.value - 1
-  const isLastCol = col === cols.value - 1
+  const isLastRow = row === activeRows.value - 1
+  const isLastCol = col === activeCols.value - 1
   return {
     width: `${cellSize.value}px`,
     height: `${cellSize.value}px`,
@@ -374,9 +426,24 @@ function cellStyle(code: string, index: number): CSSProperties {
   }
 }
 
+function cellDisplayText(code: string, index: number) {
+  if (!selectedCode.value || code !== selectedCode.value) {
+    return code || ''
+  }
+  return highlightLabelMap.value.get(index) || '1'
+}
+
+function notifyOcrServiceSummary(summary?: string) {
+  const text = (summary || '').trim()
+  if (!text) {
+    return
+  }
+  alert(`本次AI服务调用：${text}`)
+}
+
 async function analyzeGrid() {
   if (!props.project.patternImage) return
-  if (rows.value <= 0 || cols.value <= 0) {
+  if (inputRows.value <= 0 || inputCols.value <= 0) {
     alert('行列数必须大于 0')
     return
   }
@@ -389,35 +456,59 @@ async function analyzeGrid() {
   analyzeStatus.value = '正在调用百度 OCR 分析网格...'
 
   try {
-    const cropped = cropSelectedImage()
+    const targetRows = Math.max(1, Math.floor(Number(inputRows.value || 0)))
+    const targetCols = Math.max(1, Math.floor(Number(inputCols.value || 0)))
+    const selection = getSelectionNaturalRect()
+    const originalImageBase64 = getOriginalImageBase64ForUpload()
     const candidateCodes = localColors.value
       .map(item => (item.code || '').trim().toUpperCase())
       .filter(Boolean)
+    const candidateQuantities: Record<string, number> = {}
+    const candidateColorHex: Record<string, string> = {}
+    for (const item of localColors.value) {
+      const code = normalizeColorCode(item.code || '')
+      if (!code) continue
+      const quantity = Math.max(0, Math.floor(Number(item.quantity || 0)))
+      if (quantity > 0) {
+        candidateQuantities[code] = quantity
+      }
+      const hex = getCodeHex(code)
+      if (hex) {
+        candidateColorHex[code] = hex
+      }
+    }
 
     const result = await beadApi.analyzeGrid({
-      imageBase64: cropped.dataUrl,
-      rows: rows.value,
-      cols: cols.value,
-      imageWidth: cropped.width,
-      imageHeight: cropped.height,
-      candidateCodes
+      originalImageBase64,
+      cropRect: selection,
+      rows: targetRows,
+      cols: targetCols,
+      imageWidth: selection.width,
+      imageHeight: selection.height,
+      candidateCodes,
+      candidateQuantities,
+      candidateColorHex
     })
 
-    const total = rows.value * cols.value
+    notifyOcrServiceSummary(result.ocrServiceSummary)
+
+    const splitCount = Math.max(1, Math.ceil(Math.max(targetRows, targetCols) / 35))
+
+    const total = targetRows * targetCols
     const nextCells = new Array<string>(total).fill('')
     for (const cell of result.cells || []) {
-      if (cell.row < 0 || cell.row >= rows.value || cell.col < 0 || cell.col >= cols.value) {
+      if (cell.row < 0 || cell.row >= targetRows || cell.col < 0 || cell.col >= targetCols) {
         continue
       }
-      nextCells[cell.row * cols.value + cell.col] = cell.code || ''
+      nextCells[cell.row * targetCols + cell.col] = normalizeColorCode(cell.code || '')
     }
+    activeRows.value = targetRows
+    activeCols.value = targetCols
     cells.value = nextCells
-    await beadApi.saveGridResult(props.project.id, {
-      rows: rows.value,
-      cols: cols.value,
-      cells: nextCells
-    })
-    analyzeStatus.value = `分析完成：OCR标记 ${result.ocrCount}，填充格子 ${result.filledCount}/${total}`
+    await saveGridResult(nextCells)
+    const compareResult = compareRecognizedWithRequired(nextCells)
+    analyzeStatus.value = `分析完成：OCR标记 ${result.ocrCount}，填充格子 ${result.filledCount}/${total}；本次使用 ${splitCount}x${splitCount} 分块识别；${compareResult.summary}`
+    alert(compareResult.alertMessage)
   } catch (error) {
     console.error(error)
     analyzeStatus.value = '分析失败，请调整选区后重试'
@@ -439,15 +530,19 @@ async function extractRequiredColorsBySelection() {
 
   extractingColors.value = true
   try {
-    const cropped = cropSelectedImage()
+    const selection = getSelectionNaturalRect()
+    const originalImageBase64 = getOriginalImageBase64ForUpload()
+    const result = await beadApi.extractColorsDebug({
+      originalImageBase64,
+      cropRect: selection
+    })
+    notifyOcrServiceSummary(result.ocrServiceSummary)
     if (debugMode.value) {
-      const result = await beadApi.extractColorsDebug(cropped.dataUrl)
       debugResult.value = result
       localColors.value = result.colors || []
     } else {
-      const rows = await beadApi.extractColors(cropped.dataUrl)
       debugResult.value = null
-      localColors.value = rows
+      localColors.value = result.colors || []
     }
     if (localColors.value.length === 0) {
       alert('未识别到有效色号，请调整选区后重试')
@@ -460,10 +555,142 @@ async function extractRequiredColorsBySelection() {
   }
 }
 
+function getSelectionNaturalRect() {
+  if (!patternImgRef.value || !hasSelection.value) {
+    throw new Error('未选择裁剪区域')
+  }
+  const bounds = getImageBoundsInStage()
+  if (!bounds) {
+    throw new Error('图像位置无效')
+  }
+
+  const imageEl = patternImgRef.value
+  const displayWidth = bounds.width
+  const displayHeight = bounds.height
+  if (!displayWidth || !displayHeight) {
+    throw new Error('图像尺寸无效')
+  }
+
+  const scaleX = imageEl.naturalWidth / displayWidth
+  const scaleY = imageEl.naturalHeight / displayHeight
+  const localX = cropRect.x - bounds.left
+  const localY = cropRect.y - bounds.top
+
+  const x = Math.max(0, Math.floor(localX * scaleX))
+  const y = Math.max(0, Math.floor(localY * scaleY))
+  const width = Math.max(1, Math.floor(cropRect.w * scaleX))
+  const height = Math.max(1, Math.floor(cropRect.h * scaleY))
+
+  const maxW = Math.max(1, imageEl.naturalWidth - x)
+  const maxH = Math.max(1, imageEl.naturalHeight - y)
+
+  return {
+    x,
+    y,
+    width: Math.min(width, maxW),
+    height: Math.min(height, maxH)
+  }
+}
+
+function getOriginalImageBase64ForUpload() {
+  if (!patternImgRef.value) {
+    throw new Error('图像未加载')
+  }
+  const imageEl = patternImgRef.value
+
+  const canvas = document.createElement('canvas')
+  canvas.width = imageEl.naturalWidth
+  canvas.height = imageEl.naturalHeight
+  const context = canvas.getContext('2d')
+  if (!context) {
+    throw new Error('无法创建图像上下文')
+  }
+  context.imageSmoothingEnabled = false
+  context.drawImage(imageEl, 0, 0, imageEl.naturalWidth, imageEl.naturalHeight)
+  return canvas.toDataURL('image/png')
+}
+
 async function saveColors() {
-  const clean = localColors.value.filter(v => v.code && v.quantity > 0)
+  const clean = localColors.value
+    .map(v => ({ code: normalizeColorCode(v.code || ''), quantity: Number(v.quantity || 0) }))
+    .filter(v => v.code && v.quantity > 0)
   await beadApi.saveColors(props.project.id, clean)
   alert('保存成功')
+}
+
+function buildRequiredColorCountMap() {
+  const requiredMap = new Map<string, number>()
+  for (const item of localColors.value) {
+    const code = normalizeColorCode(item.code || '')
+    const quantity = Math.max(0, Number(item.quantity || 0))
+    if (!code || quantity <= 0) {
+      continue
+    }
+    requiredMap.set(code, (requiredMap.get(code) || 0) + quantity)
+  }
+  return requiredMap
+}
+
+function buildGridColorCountMap(gridCells: string[]) {
+  const gridMap = new Map<string, number>()
+  for (const item of gridCells) {
+    const code = normalizeColorCode(item || '')
+    if (!code) {
+      continue
+    }
+    gridMap.set(code, (gridMap.get(code) || 0) + 1)
+  }
+  return gridMap
+}
+
+function compareRecognizedWithRequired(gridCells: string[]) {
+  const requiredMap = buildRequiredColorCountMap()
+  const gridMap = buildGridColorCountMap(gridCells)
+  const allCodes = Array.from(new Set([...requiredMap.keys(), ...gridMap.keys()])).sort(compareColorCode)
+
+  const mismatchLines: string[] = []
+  for (const code of allCodes) {
+    const required = requiredMap.get(code) || 0
+    const recognized = gridMap.get(code) || 0
+    if (required !== recognized) {
+      mismatchLines.push(`${code}: 需要 ${required}，识别 ${recognized}`)
+    }
+  }
+
+  if (mismatchLines.length === 0) {
+    return {
+      summary: '识别数量与“需要色号与数量”一致',
+      alertMessage: '分析完成：识别到的色号与数量和“需要色号与数量”一致。'
+    }
+  }
+
+  const preview = mismatchLines.slice(0, 12)
+  const extra = mismatchLines.length - preview.length
+  return {
+    summary: `发现 ${mismatchLines.length} 个色号数量不一致`,
+    alertMessage: `分析完成，但识别结果与“需要色号与数量”不一致：\n${preview.join('\n')}${extra > 0 ? `\n... 另有 ${extra} 项` : ''}`
+  }
+}
+
+async function saveGridResult(nextCells: string[]) {
+  await beadApi.saveGridResult(props.project.id, {
+    rows: activeRows.value,
+    cols: activeCols.value,
+    cells: nextCells
+  })
+}
+
+async function saveGridCells() {
+  savingGrid.value = true
+  try {
+    await saveGridResult(cells.value)
+    alert('网格结果已保存')
+  } catch (error) {
+    console.error(error)
+    alert('保存网格结果失败，请重试')
+  } finally {
+    savingGrid.value = false
+  }
 }
 
 function getImageBoundsInStage() {
@@ -508,6 +735,50 @@ function getImageBoundsInStage() {
   }
 }
 
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value))
+}
+
+function syncSelectionRatioFromRect() {
+  const bounds = getImageBoundsInStage()
+  if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+    return
+  }
+
+  const xRatio = (cropRect.x - bounds.left) / bounds.width
+  const yRatio = (cropRect.y - bounds.top) / bounds.height
+  const wRatio = cropRect.w / bounds.width
+  const hRatio = cropRect.h / bounds.height
+
+  cropRectRatio.x = clamp01(xRatio)
+  cropRectRatio.y = clamp01(yRatio)
+  cropRectRatio.w = clamp01(wRatio)
+  cropRectRatio.h = clamp01(hRatio)
+}
+
+function restoreSelectionFromRatio() {
+  const bounds = getImageBoundsInStage()
+  if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+    return false
+  }
+
+  const minWRatio = MIN_CROP_SIZE / bounds.width
+  const minHRatio = MIN_CROP_SIZE / bounds.height
+  const safeWRatio = Math.max(minWRatio, Math.min(1, cropRectRatio.w || 0.8))
+  const safeHRatio = Math.max(minHRatio, Math.min(1, cropRectRatio.h || 0.8))
+
+  const maxXRatio = Math.max(0, 1 - safeWRatio)
+  const maxYRatio = Math.max(0, 1 - safeHRatio)
+  const safeXRatio = Math.max(0, Math.min(maxXRatio, cropRectRatio.x || 0.1))
+  const safeYRatio = Math.max(0, Math.min(maxYRatio, cropRectRatio.y || 0.1))
+
+  cropRect.x = bounds.left + bounds.width * safeXRatio
+  cropRect.y = bounds.top + bounds.height * safeYRatio
+  cropRect.w = Math.max(MIN_CROP_SIZE, bounds.width * safeWRatio)
+  cropRect.h = Math.max(MIN_CROP_SIZE, bounds.height * safeHRatio)
+  return true
+}
+
 function initSelectionByCorners() {
   const bounds = getImageBoundsInStage()
   if (!bounds) return
@@ -517,6 +788,7 @@ function initSelectionByCorners() {
   cropRect.y = bounds.top + marginY
   cropRect.w = Math.max(MIN_CROP_SIZE, bounds.width - marginX * 2)
   cropRect.h = Math.max(MIN_CROP_SIZE, bounds.height - marginY * 2)
+  syncSelectionRatioFromRect()
   activeHandle.value = null
 }
 
@@ -525,7 +797,9 @@ function resetSelection() {
 }
 
 function onPatternImageLoad() {
-  initSelectionByCorners()
+  if (!restoreSelectionFromRatio()) {
+    initSelectionByCorners()
+  }
 }
 
 function onHandleMouseDown(handle: 'TL' | 'TR' | 'BL' | 'BR', event: MouseEvent) {
@@ -587,8 +861,124 @@ function onCropMouseMove(event: MouseEvent) {
 }
 
 function onCropMouseUp() {
+  const wasDraggingHandle = activeHandle.value !== null
   activeHandle.value = null
   magnifierVisible.value = false
+  if (wasDraggingHandle) {
+    refreshSelectionPreview(false)
+  }
+}
+
+function refreshSelectionPreview(resetTransform = false) {
+  if (!hasSelection.value || !patternImgRef.value) {
+    return
+  }
+  try {
+    const selected = getSelectionNaturalRect()
+    const image = patternImgRef.value
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, selected.width)
+    canvas.height = Math.max(1, selected.height)
+    const context = canvas.getContext('2d')
+    if (!context) {
+      return
+    }
+    context.imageSmoothingEnabled = false
+    context.drawImage(
+      image,
+      selected.x,
+      selected.y,
+      selected.width,
+      selected.height,
+      0,
+      0,
+      selected.width,
+      selected.height
+    )
+    selectionPreviewDataUrl.value = canvas.toDataURL('image/png')
+    selectionPreviewVisible.value = true
+    if (resetTransform) {
+      resetSelectionPreviewImage()
+    }
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+function resetSelectionPreviewImage() {
+  selectionPreviewImage.scale = 1
+  selectionPreviewImage.x = 0
+  selectionPreviewImage.y = 0
+}
+
+function startSelectionPreviewDrag(event: MouseEvent) {
+  if (!selectionPreviewVisible.value) return
+  event.preventDefault()
+  selectionPreviewWindowDrag.active = true
+  selectionPreviewWindowDrag.startX = event.clientX
+  selectionPreviewWindowDrag.startY = event.clientY
+  selectionPreviewWindowDrag.left = selectionPreviewWindow.left
+  selectionPreviewWindowDrag.top = selectionPreviewWindow.top
+}
+
+function startSelectionPreviewResize(direction: 'right' | 'bottom' | 'corner', event: MouseEvent) {
+  if (!selectionPreviewVisible.value) return
+  event.preventDefault()
+  selectionPreviewResize.active = true
+  selectionPreviewResize.direction = direction
+  selectionPreviewResize.startX = event.clientX
+  selectionPreviewResize.startY = event.clientY
+  selectionPreviewResize.width = selectionPreviewWindow.width
+  selectionPreviewResize.height = selectionPreviewWindow.height
+}
+
+function startSelectionPreviewImageDrag(event: MouseEvent) {
+  if (!selectionPreviewVisible.value) return
+  if ((event.target as HTMLElement)?.classList.contains('selection-preview-viewport')) {
+    event.preventDefault()
+  }
+  selectionPreviewImageDrag.active = true
+  selectionPreviewImageDrag.startX = event.clientX
+  selectionPreviewImageDrag.startY = event.clientY
+  selectionPreviewImageDrag.x = selectionPreviewImage.x
+  selectionPreviewImageDrag.y = selectionPreviewImage.y
+}
+
+function onSelectionPreviewWheel(event: WheelEvent) {
+  const step = event.deltaY < 0 ? 1.12 : 0.9
+  const nextScale = Math.max(0.2, Math.min(8, selectionPreviewImage.scale * step))
+  selectionPreviewImage.scale = nextScale
+}
+
+function onSelectionPreviewMouseMove(event: MouseEvent) {
+  if (selectionPreviewWindowDrag.active) {
+    const nextLeft = selectionPreviewWindowDrag.left + (event.clientX - selectionPreviewWindowDrag.startX)
+    const nextTop = selectionPreviewWindowDrag.top + (event.clientY - selectionPreviewWindowDrag.startY)
+    selectionPreviewWindow.left = Math.max(0, nextLeft)
+    selectionPreviewWindow.top = Math.max(0, nextTop)
+  }
+
+  if (selectionPreviewResize.active) {
+    const dx = event.clientX - selectionPreviewResize.startX
+    const dy = event.clientY - selectionPreviewResize.startY
+    if (selectionPreviewResize.direction === 'right' || selectionPreviewResize.direction === 'corner') {
+      selectionPreviewWindow.width = Math.max(260, selectionPreviewResize.width + dx)
+    }
+    if (selectionPreviewResize.direction === 'bottom' || selectionPreviewResize.direction === 'corner') {
+      selectionPreviewWindow.height = Math.max(220, selectionPreviewResize.height + dy)
+    }
+  }
+
+  if (selectionPreviewImageDrag.active) {
+    selectionPreviewImage.x = selectionPreviewImageDrag.x + (event.clientX - selectionPreviewImageDrag.startX)
+    selectionPreviewImage.y = selectionPreviewImageDrag.y + (event.clientY - selectionPreviewImageDrag.startY)
+  }
+}
+
+function onSelectionPreviewMouseUp() {
+  selectionPreviewWindowDrag.active = false
+  selectionPreviewResize.active = false
+  selectionPreviewImageDrag.active = false
 }
 
 function updateMagnifierPosition(point: { x: number; y: number }) {
@@ -783,15 +1173,19 @@ function cropSelectedImage() {
   }
   context.drawImage(imageEl, sx, sy, sw, sh, 0, 0, sw, sh)
   return {
-    dataUrl: canvas.toDataURL('image/jpeg', 0.95),
+    dataUrl: canvas.toDataURL('image/png'),
     width: sw,
     height: sh
   }
 }
 
 function onGridWheel(event: WheelEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+
   const oldSize = cellSize.value
-  const delta = event.deltaY < 0 ? 2 : -2
+  const wheelDelta = event.deltaY === 0 ? event.deltaX : event.deltaY
+  const delta = wheelDelta < 0 ? 2 : -2
   const nextSize = Math.max(MIN_CELL_SIZE, Math.min(MAX_CELL_SIZE, oldSize + delta))
   if (nextSize === oldSize) {
     return
@@ -815,6 +1209,9 @@ function onGridWheel(event: WheelEvent) {
 }
 
 function onGridMouseDown(event: MouseEvent) {
+  if (gridEditMode.value) {
+    return
+  }
   if (event.button !== 0) {
     return
   }
@@ -845,6 +1242,46 @@ function onGridMouseMove(event: MouseEvent) {
 
 function onGridMouseUp() {
   isGridPanning.value = false
+  isGridPainting.value = false
+}
+
+function applyPaintToCell(index: number) {
+  if (index < 0 || index >= cells.value.length) {
+    return
+  }
+  const nextCode = normalizeColorCode(editPaintCode.value || '')
+  if (cells.value[index] === nextCode) {
+    return
+  }
+  const nextCells = [...cells.value]
+  nextCells[index] = nextCode
+  cells.value = nextCells
+}
+
+function onGridCellMouseDown(index: number, event: MouseEvent) {
+  if (!gridEditMode.value) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  isGridPainting.value = true
+  applyPaintToCell(index)
+}
+
+function onGridCellMouseEnter(index: number) {
+  if (!gridEditMode.value || !isGridPainting.value) {
+    return
+  }
+  applyPaintToCell(index)
+}
+
+function onGridCellMouseUp(event: MouseEvent) {
+  if (!gridEditMode.value) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  isGridPainting.value = false
 }
 
 async function toggleGridFullscreen() {
@@ -871,6 +1308,11 @@ async function toggleGridFullscreen() {
 
 function onFullscreenChange() {
   isGridFullscreen.value = document.fullscreenElement === fullscreenHostRef.value
+  if (isGridFullscreen.value) {
+    document.body.style.overflow = 'hidden'
+  } else {
+    document.body.style.overflow = ''
+  }
 }
 
 function parseGridCells(gridCellsJson: string | undefined, expectedLength: number) {
@@ -882,7 +1324,7 @@ function parseGridCells(gridCellsJson: string | undefined, expectedLength: numbe
     if (!Array.isArray(parsed)) {
       return new Array<string>(expectedLength).fill('')
     }
-    const normalized = parsed.map(item => (item == null ? '' : String(item)))
+    const normalized = parsed.map(item => (item == null ? '' : normalizeColorCode(String(item))))
     if (normalized.length < expectedLength) {
       return [...normalized, ...new Array<string>(expectedLength - normalized.length).fill('')]
     }
@@ -897,9 +1339,107 @@ const hasSelection = computed(() => cropRect.w > 0 && cropRect.h > 0)
 const paletteCodes = computed(() => {
   const fromGrid = cells.value.filter(Boolean)
   const fromRequired = localColors.value
-    .map(item => (item.code || '').trim().toUpperCase())
+    .map(item => normalizeColorCode(item.code || ''))
     .filter(Boolean)
-  return Array.from(new Set([...fromGrid, ...fromRequired])).sort((left, right) => left.localeCompare(right, 'en'))
+  return Array.from(new Set([...fromGrid, ...fromRequired])).sort(compareColorCode)
+})
+
+const highlightLabelMap = computed(() => {
+  const map = new Map<number, string>()
+  const targetCode = normalizeColorCode(selectedCode.value || '')
+  if (!targetCode || activeRows.value <= 0 || activeCols.value <= 0) {
+    return map
+  }
+
+  const numericLabels = new Map<number, number>()
+  const horizontalNumbered = new Set<number>()
+  const rows = activeRows.value
+  const cols = activeCols.value
+
+  const toIndex = (row: number, col: number) => row * cols + col
+  const isTarget = (row: number, col: number) => {
+    if (row < 0 || row >= rows || col < 0 || col >= cols) {
+      return false
+    }
+    return (cells.value[toIndex(row, col)] || '') === targetCode
+  }
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      if (!isTarget(row, col)) {
+        continue
+      }
+      const leftIsTarget = isTarget(row, col - 1)
+      const rightIsTarget = isTarget(row, col + 1)
+      if (leftIsTarget || !rightIsTarget) {
+        continue
+      }
+
+      let seq = 1
+      let cursor = col
+      while (cursor < cols && isTarget(row, cursor)) {
+        const currentIndex = toIndex(row, cursor)
+        numericLabels.set(currentIndex, seq)
+        horizontalNumbered.add(currentIndex)
+        seq += 1
+        cursor += 1
+      }
+    }
+  }
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      if (!isTarget(row, col)) {
+        continue
+      }
+
+      const aboveIsTarget = isTarget(row - 1, col)
+      const belowIndex = toIndex(row + 1, col)
+      const belowIsTarget = isTarget(row + 1, col) && !horizontalNumbered.has(belowIndex)
+      if (!belowIsTarget) {
+        continue
+      }
+
+      const aboveMarked = aboveIsTarget && numericLabels.has(toIndex(row - 1, col))
+      const aboveEmptyOrMarked = !aboveIsTarget || aboveMarked
+      const belowUnmarked = !numericLabels.has(belowIndex)
+      if (!aboveEmptyOrMarked || !belowUnmarked) {
+        continue
+      }
+
+      let seq = 1
+      let cursor = row
+      while (cursor < rows && isTarget(cursor, col)) {
+        const currentIndex = toIndex(cursor, col)
+        if (horizontalNumbered.has(currentIndex)) {
+          break
+        }
+        if (numericLabels.has(currentIndex)) {
+          break
+        }
+        if (!numericLabels.has(currentIndex)) {
+          numericLabels.set(currentIndex, seq)
+        }
+        seq += 1
+        cursor += 1
+      }
+    }
+  }
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const index = toIndex(row, col)
+      if (!isTarget(row, col)) {
+        continue
+      }
+      if (!numericLabels.has(index)) {
+        numericLabels.set(index, 1)
+      }
+      map.set(index, String(numericLabels.get(index) || 1))
+    }
+  }
+
+  return map
 })
 
 const cropRectStyle = computed(() => ({
@@ -943,12 +1483,59 @@ const magnifierStyle = computed(() => ({
   top: `${magnifierPos.y}px`
 }))
 
+const selectionPreviewWindowStyle = computed(() => ({
+  left: `${selectionPreviewWindow.left}px`,
+  top: `${selectionPreviewWindow.top}px`,
+  width: `${selectionPreviewWindow.width}px`,
+  height: `${selectionPreviewWindow.height}px`
+}))
+
+const selectionPreviewImageStyle = computed(() => ({
+  transform: `translate(${selectionPreviewImage.x}px, ${selectionPreviewImage.y}px) scale(${selectionPreviewImage.scale})`,
+  transformOrigin: 'center center'
+}))
+
+watch(
+  () => [cropRect.x, cropRect.y, cropRect.w, cropRect.h],
+  () => {
+    if (hasSelection.value) {
+      syncSelectionRatioFromRect()
+    }
+  }
+)
+
+watch(
+  () => [activeRows.value, activeCols.value],
+  async () => {
+    if (!hasSelection.value) {
+      return
+    }
+    await nextTick()
+    restoreSelectionFromRatio()
+  }
+)
+
+watch(paletteCodes, (codes) => {
+  if (codes.length === 0) {
+    editPaintCode.value = ''
+    return
+  }
+  if (!editPaintCode.value || !codes.includes(editPaintCode.value)) {
+    editPaintCode.value = codes[0]
+  }
+}, { immediate: true })
+
 onMounted(() => {
   document.addEventListener('fullscreenchange', onFullscreenChange)
+  document.addEventListener('mousemove', onSelectionPreviewMouseMove)
+  document.addEventListener('mouseup', onSelectionPreviewMouseUp)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.removeEventListener('mousemove', onSelectionPreviewMouseMove)
+  document.removeEventListener('mouseup', onSelectionPreviewMouseUp)
+  document.body.style.overflow = ''
 })
 </script>
 
@@ -956,6 +1543,8 @@ onBeforeUnmount(() => {
 .workbench {
   display: grid;
   gap: 10px;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .workbench-actions {
@@ -967,8 +1556,157 @@ onBeforeUnmount(() => {
   color: #40513b;
 }
 
+.color-action-col {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.icon-action-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid #c4d8ad;
+  background: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.icon-action-btn:hover {
+  transform: translateY(-1px) scale(1.04);
+  box-shadow: 0 8px 18px rgba(64, 81, 59, 0.2);
+  background: #f9fbf1;
+  border-color: #9dc08b;
+}
+
+.icon-action-btn:active {
+  transform: translateY(0) scale(0.96);
+}
+
+.icon-action-btn:focus-visible {
+  outline: 2px solid #609966;
+  outline-offset: 2px;
+}
+
+.icon-action-btn.add {
+  color: #166534;
+}
+
+.icon-action-btn.remove {
+  color: #b91c1c;
+}
+
+.selection-preview-window {
+  position: fixed;
+  z-index: 3000;
+  border: 1px solid #c4d8ad;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.2);
+  overflow: hidden;
+}
+
+.selection-preview-header {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  background: #edf1d6;
+  color: #40513b;
+  font-weight: 600;
+  cursor: move;
+  user-select: none;
+}
+
+.selection-preview-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.selection-preview-reset {
+  border: 1px solid #9dc08b;
+  background: #ffffff;
+  color: #40513b;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.selection-preview-close {
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  color: #40513b;
+  cursor: pointer;
+}
+
+.selection-preview-viewport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 36px;
+  bottom: 0;
+  background: #111827;
+  overflow: hidden;
+  cursor: grab;
+}
+
+.selection-preview-image {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: none;
+  max-height: none;
+  user-select: none;
+  pointer-events: none;
+}
+
+.selection-preview-resize-handle {
+  position: absolute;
+  z-index: 2;
+}
+
+.selection-preview-resize-handle.right {
+  right: 0;
+  top: 36px;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.selection-preview-resize-handle.bottom {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.selection-preview-resize-handle.corner {
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
 .section-card {
   margin-bottom: 2px;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.fullscreen-host {
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .section-head {
@@ -1069,6 +1807,17 @@ onBeforeUnmount(() => {
   margin-top: 8px;
 }
 
+.grid-edit-row {
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.edit-select {
+  min-width: 140px;
+}
+
 .crop-stage {
   position: relative;
   border: 1px solid #c4d8ad;
@@ -1128,10 +1877,14 @@ onBeforeUnmount(() => {
 .bead-grid-scroll {
   max-height: 420px;
   max-width: 100%;
+  width: 100%;
   overflow: auto;
+  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
   border: 1px solid #c4d8ad;
   border-radius: 12px;
   padding: 8px;
+  box-sizing: border-box;
   cursor: grab;
   user-select: none;
   background: #ffffff;
@@ -1196,6 +1949,8 @@ onBeforeUnmount(() => {
 .fullscreen-host.is-fullscreen {
   width: 100vw;
   height: 100vh;
+  overflow: hidden;
+  overscroll-behavior: none;
   border-radius: 0;
   border: none;
   margin: 0;
@@ -1207,6 +1962,7 @@ onBeforeUnmount(() => {
 
 .fullscreen-host.is-fullscreen .bead-grid-scroll {
   flex: 1;
+  min-height: 0;
   max-height: none;
 }
 

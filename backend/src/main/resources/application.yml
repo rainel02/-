@@ -25,7 +25,7 @@ spring:
 
 baidu:
   ocr:
-    ak: YxZge8S1fgssCpo8d9F8Fqwg
-    sk: BK5jbZWsjN4BRAV8AzN6yMNjHEkFMabr
+    ak: ${BAIDU_OCR_AK1:}
+    sk: ${BAIDU_OCR_SK1:}
     ak2: ${BAIDU_OCR_AK2:}
     sk2: ${BAIDU_OCR_SK2:}

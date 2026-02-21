@@ -3,8 +3,8 @@
     <h2 class="section-title">新建拼豆</h2>
     <div class="row new-layout">
       <div class="new-col">
-        <label>拼豆名称（必填）<input class="input" v-model="form.name" /></label>
-        <label>拼豆 tag（可复用）</label>
+        <label>拼豆名称*<input class="input" v-model="form.name" /></label>
+        <label>拼豆 tag</label>
         <div class="card tag-card">
           <div class="row tag-list">
             <div v-for="tag in existingTags" :key="tag" class="tag-item">
@@ -20,7 +20,7 @@
           </div>
           <div class="selected-tags">已选：{{ selectedTags.join(', ') || '无' }}</div>
         </div>
-        <label>拼豆状态（必填）
+        <label>拼豆状态*
           <select class="select" v-model="form.status">
             <option value="DONE">已拼完</option>
             <option value="IN_PROGRESS">正在拼</option>
@@ -28,12 +28,12 @@
           </select>
         </label>
         <label>图纸来源链接<input class="input" v-model="form.sourceUrl" placeholder="https://..." /></label>
-        <label>拼豆图纸（必填）<input class="input" type="file" accept="image/*" @change="onPattern" /></label>
+        <label>拼豆图纸*<input class="input" type="file" accept="image/*" @change="onPattern" /></label>
         <label>我的作品<input class="input" type="file" accept="image/*" @change="onWork" /></label>
       </div>
 
       <div class="new-col">
-        <h3 class="extract-title">提取色号与数量（必填）</h3>
+        <h3 class="extract-title">提取色号与数量*</h3>
         <div v-if="form.patternImage" class="card crop-card">
           <div class="helper-text">可拖动四个角控制点定位“色号+数量”区域，再点击提取</div>
           <div
@@ -85,12 +85,14 @@
               <tr v-for="(row, idx) in form.requiredColors" :key="idx">
                 <td><input class="input" v-model="row.code" /></td>
                 <td><input class="input" type="number" min="1" v-model.number="row.quantity" /></td>
-                <td><button class="btn warn" @click="removeColor(idx)">删</button></td>
+                <td class="color-action-col">
+                  <button class="icon-action-btn add" @click="insertColorRowAfter(idx)">+</button>
+                  <button class="icon-action-btn remove" @click="removeColor(idx)">×</button>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
-        <button class="btn secondary" @click="addColorRow">+ 手动添加色号</button>
       </div>
     </div>
 
@@ -453,7 +455,7 @@ async function extract() {
   extracting.value = true
   try {
     const selectedImage = cropSelectedImageBase64()
-    const rows = await beadApi.extractColors(selectedImage)
+    const rows = await beadApi.extractColors({ imageBase64: selectedImage })
     form.requiredColors = rows
     if (rows.length === 0) {
       alert('未识别到有效色号，请调整图纸清晰度后重试，或手动添加。')
@@ -470,11 +472,12 @@ function removeColor(index: number) {
   form.requiredColors?.splice(index, 1)
 }
 
-function addColorRow() {
+function insertColorRowAfter(index: number) {
   if (!form.requiredColors) {
     form.requiredColors = []
   }
-  form.requiredColors.push({ code: '', quantity: 1 })
+  const target = Math.max(0, Math.min(index + 1, form.requiredColors.length))
+  form.requiredColors.splice(target, 0, { code: '', quantity: 1 })
 }
 
 async function save() {
@@ -492,16 +495,22 @@ async function save() {
   router.push(`/detail/${created.id}`)
 }
 
-function addCustomTag() {
+async function addCustomTag() {
   const t = newTag.value.trim()
   if (!t) return
-  if (!existingTags.value.includes(t)) {
-    existingTags.value.push(t)
+  try {
+    await beadApi.addTag(t)
+    if (!existingTags.value.includes(t)) {
+      existingTags.value.push(t)
+    }
+    if (!selectedTags.value.includes(t)) {
+      selectedTags.value.push(t)
+    }
+    newTag.value = ''
+  } catch (error) {
+    console.error(error)
+    alert('新增 tag 失败，请稍后重试')
   }
-  if (!selectedTags.value.includes(t)) {
-    selectedTags.value.push(t)
-  }
-  newTag.value = ''
 }
 
 async function removeTag(tag: string) {
@@ -681,6 +690,51 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+.color-action-col {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.icon-action-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid #c4d8ad;
+  background: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.icon-action-btn:hover {
+  transform: translateY(-1px) scale(1.04);
+  box-shadow: 0 8px 18px rgba(64, 81, 59, 0.2);
+  background: #f9fbf1;
+  border-color: #9dc08b;
+}
+
+.icon-action-btn:active {
+  transform: translateY(0) scale(0.96);
+}
+
+.icon-action-btn:focus-visible {
+  outline: 2px solid #609966;
+  outline-offset: 2px;
+}
+
+.icon-action-btn.add {
+  color: #166534;
+}
+
+.icon-action-btn.remove {
+  color: #b91c1c;
 }
 
 .tag-remove-btn {

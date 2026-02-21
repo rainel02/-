@@ -8,6 +8,7 @@ public class GridAnalysisResult {
     private int cols;
     private int ocrCount;
     private int filledCount;
+    private String ocrServiceSummary;
     private List<GridAnalysisCell> cells = new ArrayList<>();
 
     public int getRows() {
@@ -40,6 +41,14 @@ public class GridAnalysisResult {
 
     public void setFilledCount(int filledCount) {
         this.filledCount = filledCount;
+    }
+
+    public String getOcrServiceSummary() {
+        return ocrServiceSummary;
+    }
+
+    public void setOcrServiceSummary(String ocrServiceSummary) {
+        this.ocrServiceSummary = ocrServiceSummary;
     }
 
     public List<GridAnalysisCell> getCells() {

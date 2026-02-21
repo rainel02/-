@@ -15,6 +15,10 @@ let backendPort = BACKEND_PORT
 let frontendServer = null
 let frontendPort = FRONTEND_PORT_BASE
 
+function normalizePathForJdbc(filePath) {
+  return filePath.replace(/\\/g, '/')
+}
+
 function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true })
@@ -60,6 +64,80 @@ function getFrontendDistPath() {
   return path.join(getProjectRoot(), 'frontend', 'dist')
 }
 
+function getBackendDataDir() {
+  const dataDir = path.join(app.getPath('userData'), 'data')
+  ensureDir(dataDir)
+  return dataDir
+}
+
+function getPersistentDbBasePath() {
+  return path.join(getBackendDataDir(), 'pindou-db')
+}
+
+function hasH2DbFiles(dbBasePath) {
+  const candidates = [
+    `${dbBasePath}.mv.db`,
+    `${dbBasePath}.trace.db`,
+    `${dbBasePath}.lock.db`
+  ]
+  return candidates.some(filePath => fs.existsSync(filePath))
+}
+
+function copyDbFiles(fromDataDir, toDataDir) {
+  if (!fs.existsSync(fromDataDir)) return 0
+  const names = fs.readdirSync(fromDataDir)
+  let copiedCount = 0
+  for (const name of names) {
+    if (!name.startsWith('pindou-db')) continue
+    const src = path.join(fromDataDir, name)
+    const dest = path.join(toDataDir, name)
+    if (!fs.statSync(src).isFile()) continue
+    fs.copyFileSync(src, dest)
+    copiedCount += 1
+  }
+  return copiedCount
+}
+
+function migrateLegacyDatabaseIfNeeded() {
+  const targetBasePath = getPersistentDbBasePath()
+  if (hasH2DbFiles(targetBasePath)) {
+    return
+  }
+
+  const candidateDataDirs = []
+  const cwdData = path.join(process.cwd(), 'data')
+  candidateDataDirs.push(cwdData)
+
+  const execData = path.join(path.dirname(process.execPath), 'data')
+  candidateDataDirs.push(execData)
+
+  const projectData = path.join(getProjectRoot(), 'data')
+  candidateDataDirs.push(projectData)
+
+  const targetDataDir = getBackendDataDir()
+  for (const candidateDir of candidateDataDirs) {
+    try {
+      if (!fs.existsSync(candidateDir)) continue
+      if (path.resolve(candidateDir) === path.resolve(targetDataDir)) continue
+      const candidateBasePath = path.join(candidateDir, 'pindou-db')
+      if (!hasH2DbFiles(candidateBasePath)) continue
+
+      const copied = copyDbFiles(candidateDir, targetDataDir)
+      if (copied > 0) {
+        console.log(`[backend] 已迁移历史数据：${candidateDir} -> ${targetDataDir}`)
+      }
+      return
+    } catch (error) {
+      console.warn(`[backend] 历史数据迁移失败，已跳过 ${candidateDir}: ${String(error?.message || error)}`)
+    }
+  }
+}
+
+function getBackendDatasourceUrl() {
+  const dbPath = normalizePathForJdbc(getPersistentDbBasePath())
+  return `jdbc:h2:file:${dbPath};AUTO_SERVER=TRUE`
+}
+
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
@@ -95,7 +173,9 @@ function startBackendJar(port) {
   }
 
   const javaCmd = process.env.PINDOU_JAVA_CMD || 'java'
-  const args = ['-jar', jarPath, `--server.port=${port}`]
+  const args = ['-jar', jarPath, `--server.port=${port}`, `--spring.datasource.url=${getBackendDatasourceUrl()}`]
+
+  console.log(`[backend] data dir: ${getBackendDataDir()}`)
 
   backendProc = spawn(javaCmd, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -233,6 +313,8 @@ async function bootstrap() {
       createWindow()
       return
     }
+
+    migrateLegacyDatabaseIfNeeded()
 
     const existingPort = await detectAvailableBackendPort()
     if (existingPort) {

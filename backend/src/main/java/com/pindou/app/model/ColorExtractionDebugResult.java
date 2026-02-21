@@ -6,6 +6,7 @@ import java.util.List;
 public class ColorExtractionDebugResult {
     private List<ColorRequirement> colors = new ArrayList<>();
     private String strategy;
+    private String ocrServiceSummary;
     private String rawText;
     private List<String> locationLines = new ArrayList<>();
     private List<String> pairLogs = new ArrayList<>();
@@ -25,6 +26,14 @@ public class ColorExtractionDebugResult {
 
     public void setStrategy(String strategy) {
         this.strategy = strategy;
+    }
+
+    public String getOcrServiceSummary() {
+        return ocrServiceSummary;
+    }
+
+    public void setOcrServiceSummary(String ocrServiceSummary) {
+        this.ocrServiceSummary = ocrServiceSummary;
     }
 
     public String getRawText() {

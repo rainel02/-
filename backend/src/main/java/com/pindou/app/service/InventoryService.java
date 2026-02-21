@@ -3,8 +3,20 @@ package com.pindou.app.service;
 import com.pindou.app.model.*;
 import com.pindou.app.repository.BeadProjectRepository;
 import com.pindou.app.repository.InventoryRowRepository;
+import org.apache.poi.ss.usermodel.ClientAnchor;
+import org.apache.poi.ss.usermodel.CreationHelper;
+import org.apache.poi.ss.usermodel.Drawing;
+import org.apache.poi.ss.usermodel.Picture;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.util.Base64;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -247,6 +259,239 @@ public class InventoryService {
 
         inventoryRowRepository.saveAll(rows);
         return stock();
+    }
+
+    public byte[] exportStockExcel() {
+        List<InventoryRow> stockRows = stock();
+        List<UsageRow> usageRows = usage();
+        List<DemandRow> demandRows = demand();
+        try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            Sheet stockSheet = workbook.createSheet("库存表");
+            Sheet usageSheet = workbook.createSheet("使用表");
+            Sheet demandSheet = workbook.createSheet("需求表");
+
+            Row stockHeader = stockSheet.createRow(0);
+            stockHeader.createCell(0).setCellValue("色号");
+            stockHeader.createCell(1).setCellValue("入库总量");
+            stockHeader.createCell(2).setCellValue("库存余量");
+            stockHeader.createCell(3).setCellValue("使用量");
+            stockHeader.createCell(4).setCellValue("提醒阈值");
+            stockHeader.createCell(5).setCellValue("库存预警");
+
+            int stockRowIndex = 1;
+            for (InventoryRow item : stockRows) {
+                Row dataRow = stockSheet.createRow(stockRowIndex++);
+                dataRow.createCell(0).setCellValue(item.getCode() == null ? "" : item.getCode());
+                dataRow.createCell(1).setCellValue(safeInt(item.getInTotal()));
+                dataRow.createCell(2).setCellValue(safeInt(item.getRemain()));
+                dataRow.createCell(3).setCellValue(safeInt(item.getUsed()));
+                dataRow.createCell(4).setCellValue(safeInt(item.getAlertThreshold()));
+                dataRow.createCell(5).setCellValue(item.getWarning() == null ? "" : item.getWarning());
+            }
+
+            List<ExportProjectColumn> usageProjects = collectProjectsFromUsageRows(usageRows);
+            Row usageHeader = usageSheet.createRow(0);
+            usageHeader.createCell(0).setCellValue("色号");
+            usageHeader.createCell(1).setCellValue("总使用");
+            for (int i = 0; i < usageProjects.size(); i++) {
+                usageHeader.createCell(2 + i).setCellValue(usageProjects.get(i).projectName());
+            }
+            Row usageImageRow = usageSheet.createRow(1);
+            usageImageRow.setHeightInPoints(90f);
+            usageImageRow.createCell(0).setCellValue("");
+            usageImageRow.createCell(1).setCellValue("");
+            for (int i = 0; i < usageProjects.size(); i++) {
+                ExportProjectColumn project = usageProjects.get(i);
+                int col = 2 + i;
+                if (!insertProjectImage(workbook, usageSheet, 1, col, project.projectImage())) {
+                    usageImageRow.createCell(col).setCellValue(project.projectUrl() == null ? "" : project.projectUrl());
+                }
+            }
+
+            int usageRowIndex = 2;
+            for (UsageRow item : usageRows) {
+                Row dataRow = usageSheet.createRow(usageRowIndex++);
+                dataRow.createCell(0).setCellValue(item.getCode() == null ? "" : item.getCode());
+                dataRow.createCell(1).setCellValue(safeInt(item.getUsed()));
+                for (int i = 0; i < usageProjects.size(); i++) {
+                    ExportProjectColumn project = usageProjects.get(i);
+                    dataRow.createCell(2 + i).setCellValue(findProjectUsed(item.getProjects(), project.projectId()));
+                }
+            }
+
+            List<ExportProjectColumn> demandProjects = collectProjectsFromDemandRows(demandRows);
+            Row demandHeader = demandSheet.createRow(0);
+            demandHeader.createCell(0).setCellValue("色号");
+            demandHeader.createCell(1).setCellValue("库存余量");
+            demandHeader.createCell(2).setCellValue("总需求");
+            demandHeader.createCell(3).setCellValue("需补库存量");
+            for (int i = 0; i < demandProjects.size(); i++) {
+                demandHeader.createCell(4 + i).setCellValue(demandProjects.get(i).projectName());
+            }
+            Row demandImageRow = demandSheet.createRow(1);
+            demandImageRow.setHeightInPoints(90f);
+            for (int i = 0; i < demandProjects.size(); i++) {
+                ExportProjectColumn project = demandProjects.get(i);
+                int col = 4 + i;
+                if (!insertProjectImage(workbook, demandSheet, 1, col, project.projectImage())) {
+                    demandImageRow.createCell(col).setCellValue(project.projectUrl() == null ? "" : project.projectUrl());
+                }
+            }
+
+            int demandRowIndex = 2;
+            for (DemandRow item : demandRows) {
+                Row dataRow = demandSheet.createRow(demandRowIndex++);
+                dataRow.createCell(0).setCellValue(item.getCode() == null ? "" : item.getCode());
+                dataRow.createCell(1).setCellValue(safeInt(item.getRemain()));
+                dataRow.createCell(2).setCellValue(sumProjectUsed(item.getProjects()));
+                dataRow.createCell(3).setCellValue(safeInt(item.getNeed()));
+                for (int i = 0; i < demandProjects.size(); i++) {
+                    ExportProjectColumn project = demandProjects.get(i);
+                    dataRow.createCell(4 + i).setCellValue(findProjectUsed(item.getProjects(), project.projectId()));
+                }
+            }
+
+            for (int i = 0; i < 6; i++) {
+                stockSheet.autoSizeColumn(i);
+            }
+            usageSheet.autoSizeColumn(0);
+            usageSheet.autoSizeColumn(1);
+            for (int i = 0; i < usageProjects.size(); i++) {
+                usageSheet.setColumnWidth(2 + i, 5200);
+            }
+            demandSheet.autoSizeColumn(0);
+            demandSheet.autoSizeColumn(1);
+            demandSheet.autoSizeColumn(2);
+            demandSheet.autoSizeColumn(3);
+            for (int i = 0; i < demandProjects.size(); i++) {
+                demandSheet.setColumnWidth(4 + i, 5200);
+            }
+
+            workbook.write(output);
+            return output.toByteArray();
+        } catch (Exception exception) {
+            throw new IllegalStateException("导出库存 Excel 失败: " + exception.getMessage(), exception);
+        }
+    }
+
+    private List<ExportProjectColumn> collectProjectsFromUsageRows(List<UsageRow> rows) {
+        Map<Long, ExportProjectColumn> map = new HashMap<>();
+        List<ExportProjectColumn> ordered = new ArrayList<>();
+        for (UsageRow row : rows) {
+            if (row == null || row.getProjects() == null) {
+                continue;
+            }
+            for (UsageProjectItem item : row.getProjects()) {
+                if (item == null || item.getProjectId() == null) {
+                    continue;
+                }
+                if (!map.containsKey(item.getProjectId())) {
+                    ExportProjectColumn project = new ExportProjectColumn(
+                            item.getProjectId(),
+                            item.getProjectName() == null ? "未命名" : item.getProjectName(),
+                            item.getProjectImage(),
+                            item.getProjectUrl()
+                    );
+                    map.put(item.getProjectId(), project);
+                    ordered.add(project);
+                }
+            }
+        }
+        ordered.sort(Comparator.comparing(ExportProjectColumn::projectName, Comparator.nullsLast(String::compareToIgnoreCase)));
+        return ordered;
+    }
+
+    private List<ExportProjectColumn> collectProjectsFromDemandRows(List<DemandRow> rows) {
+        Map<Long, ExportProjectColumn> map = new HashMap<>();
+        List<ExportProjectColumn> ordered = new ArrayList<>();
+        for (DemandRow row : rows) {
+            if (row == null || row.getProjects() == null) {
+                continue;
+            }
+            for (UsageProjectItem item : row.getProjects()) {
+                if (item == null || item.getProjectId() == null) {
+                    continue;
+                }
+                if (!map.containsKey(item.getProjectId())) {
+                    ExportProjectColumn project = new ExportProjectColumn(
+                            item.getProjectId(),
+                            item.getProjectName() == null ? "未命名" : item.getProjectName(),
+                            item.getProjectImage(),
+                            item.getProjectUrl()
+                    );
+                    map.put(item.getProjectId(), project);
+                    ordered.add(project);
+                }
+            }
+        }
+        ordered.sort(Comparator.comparing(ExportProjectColumn::projectName, Comparator.nullsLast(String::compareToIgnoreCase)));
+        return ordered;
+    }
+
+    private int findProjectUsed(List<UsageProjectItem> projects, Long projectId) {
+        if (projects == null || projectId == null) {
+            return 0;
+        }
+        for (UsageProjectItem project : projects) {
+            if (project == null || project.getProjectId() == null) {
+                continue;
+            }
+            if (projectId.equals(project.getProjectId())) {
+                return safeInt(project.getUsed());
+            }
+        }
+        return 0;
+    }
+
+    private int sumProjectUsed(List<UsageProjectItem> projects) {
+        int total = 0;
+        if (projects == null) {
+            return total;
+        }
+        for (UsageProjectItem item : projects) {
+            total += safeInt(item == null ? null : item.getUsed());
+        }
+        return total;
+    }
+
+    private boolean insertProjectImage(Workbook workbook, Sheet sheet, int rowIndex, int colIndex, String dataUrl) {
+        try {
+            if (dataUrl == null || dataUrl.isBlank()) {
+                return false;
+            }
+            String trimmed = dataUrl.trim();
+            int comma = trimmed.indexOf(',');
+            if (!trimmed.startsWith("data:") || comma < 0) {
+                return false;
+            }
+
+            String header = trimmed.substring(0, comma).toLowerCase();
+            String payload = trimmed.substring(comma + 1);
+            byte[] bytes = Base64.getDecoder().decode(payload);
+            int pictureType = Workbook.PICTURE_TYPE_PNG;
+            if (header.contains("image/jpeg") || header.contains("image/jpg")) {
+                pictureType = Workbook.PICTURE_TYPE_JPEG;
+            }
+
+            try (InputStream ignored = new ByteArrayInputStream(bytes)) {
+                int pictureIndex = workbook.addPicture(bytes, pictureType);
+                CreationHelper helper = workbook.getCreationHelper();
+                Drawing<?> drawing = sheet.createDrawingPatriarch();
+                ClientAnchor anchor = helper.createClientAnchor();
+                anchor.setCol1(colIndex);
+                anchor.setRow1(rowIndex);
+                anchor.setCol2(colIndex + 1);
+                anchor.setRow2(rowIndex + 1);
+                Picture picture = drawing.createPicture(anchor, pictureIndex);
+                picture.resize(1.0, 1.0);
+                return true;
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private record ExportProjectColumn(Long projectId, String projectName, String projectImage, String projectUrl) {
     }
 
     private List<InventoryRow> ensureCanonicalRows() {

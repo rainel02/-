@@ -5,6 +5,9 @@ import com.pindou.app.model.InventoryRow;
 import com.pindou.app.model.TodoProjectRow;
 import com.pindou.app.model.UsageRow;
 import com.pindou.app.service.InventoryService;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -57,5 +60,14 @@ public class InventoryController {
     @PatchMapping("/in-totals")
     public List<InventoryRow> updateInTotals(@RequestBody Map<String, Integer> request) {
         return inventoryService.updateInTotals(request);
+    }
+
+    @GetMapping("/export")
+    public ResponseEntity<byte[]> exportStockExcel() {
+        byte[] content = inventoryService.exportStockExcel();
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=inventory-stock.xlsx")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(content);
     }
 }

@@ -23,6 +23,14 @@
       <button class="btn" @click="openRestockDialog">入库</button>
     </div>
 
+    <div class="row stock-toolbar" v-if="tab==='demand'">
+      <label>排序方式</label>
+      <select class="select stock-select" v-model="demandSortMode">
+        <option value="code">按色号（A1、A2...）</option>
+        <option value="need">按需补库存量</option>
+      </select>
+    </div>
+
     <div class="table-wrap" v-if="tab==='stock'" ref="stockTableWrapRef" @wheel="onTableWheel($event, 'stock')">
       <table class="table">
         <thead><tr><th>色号</th><th>入库总量</th><th>库存余量</th><th>使用量</th><th>提醒阈值</th><th>库存预警</th></tr></thead>
@@ -133,10 +141,10 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-if="demand.length === 0">
+          <tr v-if="sortedDemand.length === 0">
             <td :colspan="4 + demandProjects.length">暂无需求数据</td>
           </tr>
-          <tr v-for="row in demand" :key="row.code" :data-code="normalizedCode(row.code)">
+          <tr v-for="row in sortedDemand" :key="row.code" :data-code="normalizedCode(row.code)">
             <td class="sticky-col demand-col-1 demand-body-sticky">
               <span class="code-cell">
                 <span class="color-dot" :style="{ background: getCodeHex(row.code) || '#fff' }"></span>
@@ -203,6 +211,7 @@ const todoProjects = ref<TodoProjectRow[]>([])
 
 const stockSortField = ref<'code' | 'warning'>('code')
 const stockDesc = ref(false)
+const demandSortMode = ref<'code' | 'need'>('need')
 
 const thresholdDraft = ref<Record<string, number>>({})
 const thresholdSaving = ref<Record<string, boolean>>({})
@@ -230,6 +239,32 @@ const sortedStock = computed(() => {
     return String(a.warning).localeCompare(String(b.warning), 'zh-CN')
   })
   if (stockDesc.value) arr.reverse()
+  return arr
+})
+
+const sortedDemand = computed(() => {
+  const arr = [...demand.value]
+  arr.sort((a, b) => {
+    if (demandSortMode.value === 'code') {
+      return compareColorCode(a.code, b.code)
+    }
+
+    const leftNeed = Number(a.need || 0)
+    const rightNeed = Number(b.need || 0)
+    const needDiff = rightNeed - leftNeed
+    if (needDiff !== 0) {
+      return needDiff
+    }
+
+    if (leftNeed === 0 && rightNeed === 0) {
+      const remainDiff = Number(a.remain || 0) - Number(b.remain || 0)
+      if (remainDiff !== 0) {
+        return remainDiff
+      }
+    }
+
+    return compareColorCode(a.code, b.code)
+  })
   return arr
 })
 
