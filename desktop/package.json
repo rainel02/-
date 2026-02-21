@@ -15,8 +15,7 @@
     "dist:fast": "npm run build:all && npm run prepare:resources && electron-builder --win nsis --publish never --config.compression=store"
   },
   "dependencies": {
-    "express": "^4.21.2",
-    "http-proxy-middleware": "^3.0.3"
+    "express": "^4.21.2"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
